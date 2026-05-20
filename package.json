@@ -1,6 +1,6 @@
 {
   "name": "digital-signage-cms",
-  "version": "9.0.0",
+  "version": "9.7.0",
   "description": "Digital Signage CMS v9.0 — Multi-Tenant SaaS Platform",
   "main": "server.js",
   "scripts": {

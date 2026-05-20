@@ -187,24 +187,65 @@
       <div class="tab-pane" id="tab-designer">
         <div class="designer-layout">
           <div class="designer-sidebar">
-            <div class="designer-tools">
-              <div class="tool-group-label">Zonen</div>
-              <button class="tool-btn" id="toolAddMenu"><i class="fas fa-utensils"></i> Menü Zone</button>
-              <button class="tool-btn" id="toolAddMedia"><i class="fas fa-image"></i> Media Zone</button>
-              <button class="tool-btn" id="toolAddTicker"><i class="fas fa-scroll"></i> Ticker Zone</button>
-              <button class="tool-btn" id="toolAddText"><i class="fas fa-font"></i> Text Zone</button>
-              <button class="tool-btn" id="toolAddClock"><i class="fas fa-clock"></i> Uhr Zone</button>
-              <button class="tool-btn" id="toolAddApp"><i class="fas fa-puzzle-piece"></i> App Zone</button>
+            <!-- TOOL TABS -->
+            <div class="tool-tab-bar">
+              <button class="tool-tab active" data-toolpanel="zones" onclick="switchToolPanel('zones',this)"><i class="fas fa-layer-group"></i> Zonen</button>
+              <button class="tool-tab" data-toolpanel="shapes" onclick="switchToolPanel('shapes',this)"><i class="fas fa-shapes"></i> Grafik</button>
+              <button class="tool-tab" data-toolpanel="templates" onclick="switchToolPanel('templates',this)"><i class="fas fa-table-cells-large"></i> Vorlagen</button>
             </div>
-            <div class="designer-tools" style="margin-top:10px">
-              <div class="tool-group-label">Templates</div>
-              <div id="templateButtons" class="template-pills"></div>
+
+            <!-- ZONES PANEL -->
+            <div class="tool-panel" id="toolpanel-zones">
+              <div class="designer-tools">
+                <div class="tool-group-label">Zonen hinzufügen</div>
+                <button class="tool-btn" id="toolAddMenu"><i class="fas fa-utensils"></i> Menü Zone</button>
+                <button class="tool-btn" id="toolAddMedia"><i class="fas fa-image"></i> Media Zone</button>
+                <button class="tool-btn" id="toolAddTicker"><i class="fas fa-scroll"></i> Ticker Zone</button>
+                <button class="tool-btn" id="toolAddText"><i class="fas fa-font"></i> Text Zone</button>
+                <button class="tool-btn" id="toolAddClock"><i class="fas fa-clock"></i> Uhr Zone</button>
+                <button class="tool-btn" id="toolAddApp"><i class="fas fa-puzzle-piece"></i> App Zone</button>
+              </div>
             </div>
-            <div class="properties-panel" id="propertiesPanel">
-              <div class="tool-group-label">Eigenschaften</div>
+
+            <!-- SHAPES PANEL -->
+            <div class="tool-panel" id="toolpanel-shapes" style="display:none">
+              <div class="designer-tools">
+                <div class="tool-group-label">Werkzeug</div>
+                <button class="tool-btn" id="shapeTool-select" onclick="setShapeTool('select',this)"><i class="fas fa-arrow-pointer"></i> Auswählen</button>
+                <div class="tool-group-label" style="margin-top:8px">Formen</div>
+                <button class="tool-btn" id="shapeTool-rect" onclick="setShapeTool('rect',this)"><i class="fas fa-square"></i> Rechteck</button>
+                <button class="tool-btn" id="shapeTool-circle" onclick="setShapeTool('circle',this)"><i class="fas fa-circle"></i> Kreis / Ellipse</button>
+                <button class="tool-btn" id="shapeTool-line" onclick="setShapeTool('line',this)"><i class="fas fa-minus"></i> Linie</button>
+                <div class="tool-group-label" style="margin-top:8px">Inhalt</div>
+                <button class="tool-btn" id="shapeTool-text" onclick="setShapeTool('text',this)"><i class="fas fa-font"></i> Text / Überschrift</button>
+                <button class="tool-btn" id="shapeTool-image" onclick="setShapeTool('image',this)"><i class="fas fa-image"></i> Bild einfügen</button>
+                <div class="tool-group-label" style="margin-top:8px">Aktionen</div>
+                <button class="tool-btn" onclick="window.designerEngine?.undo()"><i class="fas fa-rotate-left"></i> Rückgängig <small>Ctrl+Z</small></button>
+                <button class="tool-btn" onclick="window.designerEngine?.redo()"><i class="fas fa-rotate-right"></i> Wiederholen <small>Ctrl+Y</small></button>
+                <button class="tool-btn" onclick="window.designerEngine?.exportPNG(url=>{const a=document.createElement('a');a.href=url;a.download='design.png';a.click()})"><i class="fas fa-download"></i> Als PNG exportieren</button>
+              </div>
+              <!-- Property panel for shapes -->
+              <div class="properties-panel" id="shapesPropertyPanel" style="margin-top:10px">
+                <div class="tool-group-label">Eigenschaften</div>
+                <p class="no-selection">Element auswählen oder zeichnen</p>
+              </div>
+            </div>
+
+            <!-- TEMPLATES PANEL -->
+            <div class="tool-panel" id="toolpanel-templates" style="display:none">
+              <div class="designer-tools">
+                <div class="tool-group-label">Layout-Vorlagen</div>
+                <div id="templateButtons" class="template-pills"></div>
+              </div>
+            </div>
+
+            <!-- ZONE PROPERTIES (always visible below) -->
+            <div class="properties-panel" id="propertiesPanel" style="margin-top:10px">
+              <div class="tool-group-label">Zonen-Eigenschaften</div>
               <p class="no-selection">Keine Zone ausgewählt</p>
             </div>
           </div>
+
           <div class="designer-main">
             <div class="designer-topbar">
               <div class="designer-status"><i class="fas fa-mouse-pointer"></i> <span id="selectedZone">Keine Zone</span></div>
@@ -215,13 +256,20 @@
                 <button class="btn-icon" id="zoomFit"><i class="fas fa-compress-arrows-alt"></i></button>
               </div>
               <div class="designer-actions">
+                <div class="snap-toggle"><label><input type="checkbox" id="snapGridToggle" checked onchange="window.designerEngine&&(window.designerEngine.snapGrid=this.checked)"> Einrasten</label></div>
+                <button class="btn-icon" id="undoBtn" title="Rückgängig Ctrl+Z"><i class="fas fa-rotate-left"></i></button>
+                <button class="btn-icon" id="redoBtn" title="Wiederholen Ctrl+Y"><i class="fas fa-rotate-right"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="admin.clearShapes()"><i class="fas fa-eraser"></i> Grafiken löschen</button>
                 <button class="btn btn-primary btn-sm" id="saveLayoutBtn"><i class="fas fa-floppy-disk"></i> Speichern</button>
               </div>
             </div>
             <div class="designer-canvas-wrap">
               <div class="designer-canvas show-grid" id="designerCanvas"></div>
             </div>
-            <div class="designer-info-bar"><span id="canvasSize">1920 × 1080</span></div>
+            <div class="designer-info-bar">
+              <span id="canvasSize">1920 × 1080</span>
+              <span id="shapesCount" style="color:var(--text-2)">0 Grafikelemente</span>
+            </div>
           </div>
         </div>
       </div>
@@ -574,6 +622,26 @@
 .role-viewer{background:rgba(90,90,120,.15);color:#9090b0}
 .status-active{color:var(--green)}.status-inactive{color:var(--red)}
 </style>
+<script src="/public/designer/designer-engine.js"></script>
+<script src="/public/designer/property-panel.js"></script>
+<script>
+// Tool panel switching
+function switchToolPanel(panel, btn) {
+    document.querySelectorAll('.tool-panel').forEach(p => p.style.display = 'none');
+    document.querySelectorAll('.tool-tab').forEach(b => b.classList.remove('active'));
+    document.getElementById('toolpanel-' + panel).style.display = '';
+    btn.classList.add('active');
+    if (panel === 'shapes' && window.designerEngine) {
+        window.pp = new PropertyPanel('shapesPropertyPanel', window.designerEngine);
+    }
+}
+// Shape tool selection
+function setShapeTool(tool, btn) {
+    document.querySelectorAll('[id^="shapeTool-"]').forEach(b => b.classList.remove('active'));
+    btn?.classList.add('active');
+    window.designerEngine?.setTool(tool);
+}
+</script>
 <script src="admin.js"></script>
 </body>
 </html>

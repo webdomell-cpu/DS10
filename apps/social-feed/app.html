@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Social Feed App</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0f;--card:#141420;--border:#2a2a3a;
+  --text1:#ffffff;--text2:#b0b0c8;--text3:#6a6a8a;
+  --ig-gradient:linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888);
+  --tiktok:#010101;
+}
+html,body{height:100%;font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(--text1);overflow:hidden}
+#app{width:100%;height:100%;display:flex;flex-direction:column}
+
+/* ─── HEADER ─── */
+.feed-header{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
+.platform-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.platform-icon.ig{background:var(--ig-gradient);color:#fff}
+.platform-icon.tt{background:var(--tiktok);color:#fff;border:1px solid #333}
+.feed-info{flex:1}
+.feed-handle{font-weight:700;font-size:15px}
+.feed-meta{font-size:11px;color:var(--text3)}
+.feed-status{width:8px;height:8px;border-radius:50%;background:#22d3a4;flex-shrink:0;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(34,211,164,.4)}50%{box-shadow:0 0 0 4px rgba(34,211,164,0)}}
+
+/* ─── GRID LAYOUTS ─── */
+.feed-grid{flex:1;overflow:hidden;padding:8px;display:grid;gap:6px}
+.grid-2x2{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+.grid-3x1{grid-template-columns:1fr 1fr 1fr}
+.grid-1-big{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+.grid-1-big .post-card:first-child{grid-row:1/3}
+.grid-masonry{grid-template-columns:1fr 1fr;grid-auto-rows:auto}
+.grid-strip{grid-template-columns:repeat(4,1fr)}
+
+/* ─── POST CARD ─── */
+.post-card{border-radius:10px;overflow:hidden;position:relative;background:var(--card);border:1px solid var(--border);cursor:pointer;transition:transform .2s}
+.post-card:hover{transform:scale(1.02)}
+.post-img{width:100%;height:100%;object-fit:cover;display:block}
+.post-video{width:100%;height:100%;object-fit:cover;display:block}
+.post-overlay{position:absolute;inset:0;background:linear-gradient(transparent 40%,rgba(0,0,0,.7));opacity:0;transition:opacity .2s}
+.post-card:hover .post-overlay{opacity:1}
+.post-caption{position:absolute;bottom:0;left:0;right:0;padding:10px;font-size:clamp(9px,.8vw,12px);color:#fff;line-height:1.3;transform:translateY(100%);transition:transform .2s}
+.post-card:hover .post-caption{transform:none}
+.post-likes{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.6);color:#fff;border-radius:12px;padding:3px 8px;font-size:10px;font-weight:600;display:flex;align-items:center;gap:4px}
+.post-type-badge{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.6);color:#fff;border-radius:8px;padding:3px 8px;font-size:9px;font-weight:600}
+.post-loading{display:flex;align-items:center;justify-content:center;height:100%;background:var(--card)}
+.shimmer{width:100%;height:100%;background:linear-gradient(90deg,var(--border) 25%,rgba(255,255,255,.05) 50%,var(--border) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite}
+@keyframes shimmer{to{background-position:-200% 0}}
+
+/* ─── ERROR / DEMO ─── */
+.demo-card{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:6px;background:var(--card);font-size:clamp(18px,3vw,48px)}
+.demo-caption{font-size:clamp(9px,.7vw,12px);color:var(--text2);text-align:center;padding:0 8px}
+.feed-error{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:12px;color:var(--text3);text-align:center;padding:20px}
+.feed-error i{font-size:36px}
+
+/* ─── TIKTOK ─── */
+.tt-card{background:#000}
+.tt-badge{background:linear-gradient(135deg,#25F4EE,#FE2C55);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:800}
+
+/* ─── FOOTER / TICKER ─── */
+.feed-footer{padding:8px 16px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);flex-shrink:0;display:flex;align-items:center;justify-content:space-between}
+.updated-at{font-size:10px;color:var(--text3)}
+.hashtag-chip{background:rgba(124,111,255,.15);color:#7c6fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="feed-header" id="feedHeader">
+    <div class="platform-icon ig"><i class="fab fa-instagram"></i></div>
+    <div class="feed-info">
+      <div class="feed-handle" id="feedHandle">Social Feed</div>
+      <div class="feed-meta" id="feedMeta">Wird geladen…</div>
+    </div>
+    <div class="feed-status" id="feedStatus" style="background:var(--border)"></div>
+  </div>
+  <div class="feed-grid" id="feedGrid"></div>
+  <div class="feed-footer">
+    <span id="feedFooterLeft"></span>
+    <span class="updated-at" id="updatedAt"></span>
+  </div>
+</div>
+
+<script>
+// Config passed via URL params or window.APP_CONFIG
+const params = new URLSearchParams(window.location.search);
+const config = window.APP_CONFIG || {
+    platform:   params.get('platform')  || 'instagram',
+    handle:     params.get('handle')    || '',
+    hashtag:    params.get('hashtag')   || '',
+    token:      params.get('token')     || '',
+    postCount:  parseInt(params.get('postCount'))  || 6,
+    layout:     params.get('layout')    || '2x2',    // 2x2, 3x1, 1-big, strip
+    showCaptions: params.get('showCaptions') !== 'false',
+    showLikes:    params.get('showLikes')    !== 'false',
+    refreshMin:   parseInt(params.get('refreshMin'))  || 15,
+    demo:       params.get('demo') === 'true' || !params.get('token')
+};
+
+const grid   = document.getElementById('feedGrid');
+const header = document.getElementById('feedHeader');
+const handle = document.getElementById('feedHandle');
+const meta   = document.getElementById('feedMeta');
+const status = document.getElementById('feedStatus');
+const footer = document.getElementById('feedFooterLeft');
+const updated = document.getElementById('updatedAt');
+
+// Layout classes
+const layoutMap = { '2x2':'grid-2x2', '3x1':'grid-3x1', '1-big':'grid-1-big', 'strip':'grid-strip', 'masonry':'grid-masonry' };
+grid.className = 'feed-grid ' + (layoutMap[config.layout] || 'grid-2x2');
+
+// Platform UI
+const isIG = config.platform !== 'tiktok';
+document.querySelector('.platform-icon').className = `platform-icon ${isIG?'ig':'tt'}`;
+document.querySelector('.platform-icon i').className = isIG ? 'fab fa-instagram' : 'fab fa-tiktok';
+handle.textContent = config.handle ? (isIG?'@':'')+config.handle : (config.hashtag ? '#'+config.hashtag : 'Social Feed');
+footer.innerHTML = config.hashtag ? `<span class="hashtag-chip">#${config.hashtag}</span>` : '';
+
+// Skeleton loader
+function showSkeleton() {
+    grid.innerHTML = Array.from({length: config.postCount}).map(() =>
+        `<div class="post-card post-loading"><div class="shimmer"></div></div>`
+    ).join('');
+}
+
+// Demo posts
+const demoPosts = [
+    {emoji:'🍔',caption:'Classic Burger – unser Bestseller!',likes:'1.2K',type:'image'},
+    {emoji:'🍟',caption:'Crispy Fries – frisch aus der Fritteuse',likes:'856',type:'image'},
+    {emoji:'🥤',caption:'Summer Drinks sind da! 🌞',likes:'2.1K',type:'video'},
+    {emoji:'🎉',caption:'Wochenend-Special läuft!',likes:'934',type:'image'},
+    {emoji:'🌮',caption:'Neue Gerichte auf der Karte',likes:'1.8K',type:'image'},
+    {emoji:'🍕',caption:'Pizza-Freitag! Heute ab 18 Uhr',likes:'3.2K',type:'video'},
+].slice(0, config.postCount);
+
+function renderDemoPosts() {
+    status.style.background = '#f59e0b';
+    meta.textContent = 'Demo-Modus — Token konfigurieren';
+    grid.innerHTML = demoPosts.map(p => `
+        <div class="post-card">
+            <div class="demo-card">
+                <span>${p.emoji}</span>
+                ${config.showCaptions ? `<div class="demo-caption">${p.caption}</div>` : ''}
+            </div>
+            ${config.showLikes ? `<div class="post-likes"><i class="fas fa-heart"></i>${p.likes}</div>` : ''}
+            <div class="post-type-badge">${p.type === 'video' ? '▶️' : '📷'}</div>
+        </div>`).join('');
+    updated.textContent = 'Demo • ' + new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+}
+
+// Real Instagram Basic Display API
+async function fetchInstagram() {
+    showSkeleton();
+    try {
+        let url;
+        if (config.hashtag && config.token) {
+            // Hashtag search requires Business API
+            url = `https://graph.instagram.com/v18.0/ig_hashtag_search?user_id=me&q=${encodeURIComponent(config.hashtag)}&access_token=${config.token}`;
+        } else {
+            url = `https://graph.instagram.com/me/media?fields=id,media_type,media_url,thumbnail_url,caption,like_count,timestamp&limit=${config.postCount}&access_token=${config.token}`;
+        }
+        const res  = await fetch(url);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message);
+
+        const posts = data.data || [];
+        if (!posts.length) { renderDemoPosts(); return; }
+
+        status.style.background = '#22d3a4';
+        meta.textContent = `${posts.length} Posts geladen`;
+
+        grid.innerHTML = posts.map(p => {
+            const isVideo = p.media_type === 'VIDEO' || p.media_type === 'REELS';
+            const src = isVideo ? (p.thumbnail_url || p.media_url) : p.media_url;
+            const caption = (p.caption || '').substring(0, 100);
+            const likes = p.like_count ? (p.like_count > 999 ? (p.like_count/1000).toFixed(1)+'K' : p.like_count) : '';
+            return `<div class="post-card">
+                ${isVideo
+                    ? `<video class="post-video" src="${p.media_url}" ${config.postCount <= 2 ? 'autoplay' : ''} muted loop playsinline poster="${p.thumbnail_url||''}"></video>`
+                    : `<img class="post-img" src="${src}" loading="lazy" alt="${caption.substring(0,30)}">`}
+                <div class="post-overlay"></div>
+                ${config.showCaptions && caption ? `<div class="post-caption">${caption}</div>` : ''}
+                ${config.showLikes && likes ? `<div class="post-likes"><i class="fas fa-heart"></i>${likes}</div>` : ''}
+                ${isVideo ? `<div class="post-type-badge">▶ Reel</div>` : ''}
+            </div>`;
+        }).join('');
+        updated.textContent = 'Aktualisiert ' + new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+    } catch(e) {
+        console.error('Instagram error:', e);
+        if (config.demo) { renderDemoPosts(); return; }
+        grid.innerHTML = `<div class="feed-error" style="grid-column:1/-1">
+            <i class="fab fa-instagram"></i>
+            <strong>Feed konnte nicht geladen werden</strong>
+            <span style="font-size:12px">${e.message}</span>
+            <span style="font-size:11px">Token in Admin → Apps → Social Feed konfigurieren</span>
+        </div>`;
+        status.style.background = '#f43f5e';
+    }
+}
+
+// TikTok (via oembed for public display)
+async function fetchTikTok() {
+    showSkeleton();
+    // TikTok requires their Display API — use oEmbed for individual posts or
+    // demo mode with brand styling
+    const ttHandle = config.handle || 'tiktok';
+    status.style.background = '#f59e0b';
+    meta.textContent = '@' + ttHandle + ' • TikTok';
+    const ttDemos = ['🎬','🎵','💃','🔥','✨','🎤'].slice(0, config.postCount);
+    grid.innerHTML = ttDemos.map((e,i) => `
+        <div class="post-card tt-card">
+            <div class="demo-card" style="background:#000">
+                <span>${e}</span>
+                <div class="demo-caption tt-badge">@${ttHandle}</div>
+            </div>
+            <div class="post-likes"><i class="fas fa-music" style="color:#25F4EE"></i>${(Math.random()*100).toFixed(1)}K</div>
+            <div class="post-type-badge">▶ TikTok</div>
+        </div>`).join('');
+    updated.textContent = 'TikTok • ' + new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+}
+
+// Init
+async function init() {
+    if (config.demo || !config.token) {
+        renderDemoPosts(); return;
+    }
+    if (config.platform === 'tiktok') {
+        await fetchTikTok();
+    } else {
+        await fetchInstagram();
+    }
+}
+
+init();
+// Auto-refresh
+setInterval(init, config.refreshMin * 60 * 1000);
+</script>
+</body>
+</html>

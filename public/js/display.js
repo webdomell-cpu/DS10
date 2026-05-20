@@ -43,10 +43,13 @@ class MenuboardDisplay {
     // ─── DATA ────────────────────────────────────────────────────────
     async loadData() {
         try {
-            const res  = await fetch('/api/data', { headers: this.authHeaders() });
+            const tenantSlug = window.TENANT_SLUG;
+            if (!tenantSlug) { console.error('TENANT_SLUG not set'); return; }
+
+            const res  = await fetch(`/api/public/${tenantSlug}/data`);
+            if (!res.ok) throw new Error('Data fetch failed: ' + res.status);
             const full = await res.json();
 
-            // Resolve display config from slug
             const slug = window.DISPLAY_SLUG;
             const disp = slug ? (full.displays||[]).find(d => d.slug === slug) : null;
 
@@ -56,11 +59,11 @@ class MenuboardDisplay {
             this.products      = full.products  || [];
             this.ticker        = full.ticker    || {};
             this.installedApps = full.apps      || [];
+            this.shapes        = full.shapes    || [];
             this.data          = full;
             this.lastModified  = full.lastModified;
             this.currentLanguage = this.settings?.languages?.default || 'de';
 
-            // Load playlist if assigned
             if (disp?.playlistId) {
                 const pl = (full.playlists||[]).find(p => p.id === disp.playlistId);
                 if (pl?.items?.length) this.playlist = pl;
@@ -68,16 +71,12 @@ class MenuboardDisplay {
         } catch(e) { console.error('loadData:', e); }
     }
 
-    authHeaders() {
-        // Display pages are public — no auth header needed for /api/data
-        // But keep for analytics/commands
-        return {};
-    }
-
     // ─── SCHEDULE ────────────────────────────────────────────────────
     async loadSchedule() {
         try {
-            const res = await fetch('/api/schedule');
+            const tenantSlug = window.TENANT_SLUG;
+            if (!tenantSlug) return;
+            const res = await fetch(`/api/public/${tenantSlug}/schedule`);
             const d   = await res.json();
             if (d.activeSchedule) {
                 if (d.activeSchedule.theme)      this.settings.theme      = d.activeSchedule.theme;
@@ -178,7 +177,134 @@ class MenuboardDisplay {
         });
 
         this.applyTickerSpeed();
+        this.renderShapes();
         this.trackAnalytics();
+    }
+
+    // ─── SHAPES (SVG graphic elements) ───────────────────────────────
+    renderShapes() {
+        const shapes = this.shapes || this.data?.shapes || [];
+        if (!shapes.length) return;
+
+        const container = document.getElementById('displayContainer');
+        if (!container) return;
+
+        // Remove old SVG overlay
+        container.querySelector('.display-shapes-overlay')?.remove();
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', 'display-shapes-overlay');
+        svg.setAttribute('viewBox', '0 0 1920 1080');
+        svg.setAttribute('preserveAspectRatio', 'xMidYMid slice');
+        svg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:50;overflow:visible';
+
+        const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        svg.appendChild(defs);
+
+        const sorted = [...shapes].sort((a,b) => (a.zIndex||0) - (b.zIndex||0));
+
+        sorted.forEach(s => {
+            if (s.opacity === 0) return;
+            const ns = 'http://www.w3.org/2000/svg';
+            let fill = s.fill || 'transparent';
+            let filterId = null;
+
+            // Gradient
+            if (s.fillType === 'gradient') {
+                const gid = 'dg-' + s.id;
+                const angle = s.gradientAngle || 135;
+                const rad = angle * Math.PI / 180;
+                const lg = document.createElementNS(ns, 'linearGradient');
+                lg.setAttribute('id', gid);
+                lg.setAttribute('x1', (50 - Math.cos(rad)*50)+'%'); lg.setAttribute('y1', (50 - Math.sin(rad)*50)+'%');
+                lg.setAttribute('x2', (50 + Math.cos(rad)*50)+'%'); lg.setAttribute('y2', (50 + Math.sin(rad)*50)+'%');
+                const s1 = document.createElementNS(ns,'stop'); s1.setAttribute('offset','0%'); s1.setAttribute('stop-color', s.gradientStart||'#6c63ff');
+                const s2 = document.createElementNS(ns,'stop'); s2.setAttribute('offset','100%'); s2.setAttribute('stop-color', s.gradientEnd||'#22d3a4');
+                lg.appendChild(s1); lg.appendChild(s2); defs.appendChild(lg);
+                fill = `url(#${gid})`;
+            }
+
+            // Shadow
+            if (s.shadow) {
+                filterId = 'df-' + s.id;
+                const f = document.createElementNS(ns, 'filter');
+                f.setAttribute('id', filterId);
+                f.setAttribute('x','-50%'); f.setAttribute('y','-50%'); f.setAttribute('width','200%'); f.setAttribute('height','200%');
+                const fe = document.createElementNS(ns,'feDropShadow');
+                fe.setAttribute('dx', s.shadowX||4); fe.setAttribute('dy', s.shadowY||4);
+                fe.setAttribute('stdDeviation', (s.shadowBlur||12)/2);
+                fe.setAttribute('flood-color', s.shadowColor||'rgba(0,0,0,.4)');
+                f.appendChild(fe); defs.appendChild(f);
+            }
+
+            let el;
+            const setCommon = el => {
+                el.setAttribute('opacity', s.opacity ?? 1);
+                if (filterId) el.setAttribute('filter', `url(#${filterId})`);
+            };
+
+            if (s.tool === 'rect') {
+                el = document.createElementNS(ns, 'rect');
+                el.setAttribute('x', s.x); el.setAttribute('y', s.y);
+                el.setAttribute('width', s.w); el.setAttribute('height', s.h);
+                el.setAttribute('fill', fill);
+                if (s.cornerRadius) el.setAttribute('rx', s.cornerRadius);
+                if (s.stroke && s.stroke !== 'none') { el.setAttribute('stroke', s.stroke); el.setAttribute('stroke-width', s.strokeWidth||1); }
+            } else if (s.tool === 'circle') {
+                el = document.createElementNS(ns, 'ellipse');
+                el.setAttribute('cx', s.x + s.w/2); el.setAttribute('cy', s.y + s.h/2);
+                el.setAttribute('rx', s.w/2); el.setAttribute('ry', s.h/2);
+                el.setAttribute('fill', fill);
+                if (s.stroke && s.stroke !== 'none') { el.setAttribute('stroke', s.stroke); el.setAttribute('stroke-width', s.strokeWidth||1); }
+            } else if (s.tool === 'line') {
+                el = document.createElementNS(ns, 'line');
+                el.setAttribute('x1', s.x); el.setAttribute('y1', s.y);
+                el.setAttribute('x2', s.x2||s.x+100); el.setAttribute('y2', s.y2||s.y);
+                el.setAttribute('stroke', s.stroke||'#fff'); el.setAttribute('stroke-width', s.strokeWidth||2);
+                el.setAttribute('stroke-linecap', s.lineCap||'round');
+                if (s.strokeDash === 'dashed') el.setAttribute('stroke-dasharray','12 6');
+                else if (s.strokeDash === 'dotted') el.setAttribute('stroke-dasharray','2 6');
+            } else if (s.tool === 'text') {
+                el = document.createElementNS(ns, 'foreignObject');
+                el.setAttribute('x', s.x); el.setAttribute('y', s.y);
+                el.setAttribute('width', s.w); el.setAttribute('height', s.h);
+                const div = document.createElement('div');
+                const shadow = s.shadow ? `text-shadow:${s.shadowX||2}px ${s.shadowY||2}px ${s.shadowBlur||8}px ${s.shadowColor||'rgba(0,0,0,.6)'}` : '';
+                const justify = s.textAlign==='center'?'center':s.textAlign==='right'?'flex-end':'flex-start';
+                div.style.cssText = `width:100%;height:100%;display:flex;align-items:center;justify-content:${justify};font-size:${s.fontSize||48}px;font-weight:${s.fontWeight||700};color:${s.textColor||'#fff'};text-align:${s.textAlign||'center'};line-height:1.2;padding:8px;${shadow};white-space:pre-wrap;word-break:break-word;`;
+                if (s.fill && s.fill !== 'transparent') div.style.background = s.fill;
+                div.textContent = s.text || '';
+                div.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+                el.appendChild(div);
+            } else if (s.tool === 'image') {
+                const g = document.createElementNS(ns, 'g');
+                if (s.cornerRadius) {
+                    const clipId = 'dc-' + s.id;
+                    const cp = document.createElementNS(ns, 'clipPath');
+                    cp.setAttribute('id', clipId);
+                    const r = document.createElementNS(ns, 'rect');
+                    r.setAttribute('x', s.x); r.setAttribute('y', s.y);
+                    r.setAttribute('width', s.w); r.setAttribute('height', s.h);
+                    r.setAttribute('rx', s.cornerRadius);
+                    cp.appendChild(r); defs.appendChild(cp);
+                    g.setAttribute('clip-path', `url(#${clipId})`);
+                }
+                el = document.createElementNS(ns, 'image');
+                el.setAttribute('x', s.x); el.setAttribute('y', s.y);
+                el.setAttribute('width', s.w); el.setAttribute('height', s.h);
+                el.setAttribute('href', s.src);
+                el.setAttribute('preserveAspectRatio', s.objectFit==='contain'?'xMidYMid meet':'xMidYMid slice');
+                if (filterId) g.setAttribute('filter', `url(#${filterId})`);
+                g.setAttribute('opacity', s.opacity ?? 1);
+                g.appendChild(el);
+                svg.appendChild(g);
+                return;
+            }
+
+            if (el) { setCommon(el); svg.appendChild(el); }
+        });
+
+        container.appendChild(svg);
     }
 
     // ─── MENU ZONE ───────────────────────────────────────────────────
@@ -321,9 +447,26 @@ class MenuboardDisplay {
                 el.innerHTML = this.renderRoomBookingApp(config, zone.id);
                 this.loadRoomCalendar(config, zone.id);
                 break;
-            case 'social':
-                el.innerHTML = this.renderSocialZone({ socialConfig: { type:'instagram', handle: config.handle, embedToken: config.token, postsCount: config.postCount || 4 } });
+            case 'social': {
+                // Use the dedicated social-feed app iframe
+                const plat   = config.platform || 'instagram';
+                const hdl    = config.handle  || '';
+                const htag   = config.hashtag || '';
+                const tok    = config.token   || '';
+                const cnt    = config.postCount || 6;
+                const layout = config.layout  || '2x2';
+                const demo   = !tok ? 'true' : 'false';
+                const src    = `/app/social-feed?platform=${plat}&handle=${encodeURIComponent(hdl)}&hashtag=${encodeURIComponent(htag)}&token=${encodeURIComponent(tok)}&postCount=${cnt}&layout=${layout}&demo=${demo}&showCaptions=${config.showCaptions!==false}&showLikes=${config.showLikes!==false}&refreshMin=${config.refreshMin||15}`;
+                el.innerHTML = `<iframe src="${src}" style="width:100%;height:100%;border:none;background:transparent" allowtransparency="true" loading="lazy"></iframe>`;
                 break;
+            }
+            case 'menuboard': {
+                const tenantSlug = window.TENANT_SLUG || 'demo';
+                const mc = config;
+                const mbSrc = `/app/menuboard?tenantSlug=${tenantSlug}&categoryFilter=${encodeURIComponent(mc.categoryFilter||'')}&columns=${mc.columns||'auto'}&showImages=${mc.showImages!==false}&showPrices=${mc.showPrices!==false}&showBadges=${mc.showBadges!==false}&cardStyle=${mc.cardStyle||'vertical'}&priceStyle=${mc.priceStyle||'badge-gold'}`;
+                el.innerHTML = `<iframe src="${mbSrc}" style="width:100%;height:100%;border:none;background:transparent" loading="lazy"></iframe>`;
+                break;
+            }
             default:
                 el.innerHTML = `<div class="zone-placeholder"><i class="fas fa-puzzle-piece"></i><span>${installedApp.name}</span></div>`;
         }
@@ -519,7 +662,9 @@ class MenuboardDisplay {
         const interval = (this.settings.refreshInterval || 30) * 1000;
         setInterval(async () => {
             try {
-                const res  = await fetch('/api/data');
+                const tenantSlug = window.TENANT_SLUG;
+                if (!tenantSlug) return;
+                const res  = await fetch(`/api/public/${tenantSlug}/data`);
                 const d    = await res.json();
                 if (d.lastModified !== this.lastModified) {
                     await this.loadData();
@@ -536,18 +681,18 @@ class MenuboardDisplay {
 
     // ─── HEARTBEAT ───────────────────────────────────────────────────
     startHeartbeat() {
-        if (!this.displayConfig?.id) return;
-        const beat = () => fetch(`/api/displays/${this.displayConfig.id}/heartbeat`, { method:'POST' }).catch(()=>{});
+        if (!this.displayConfig?.id || !window.TENANT_SLUG) return;
+        const beat = () => fetch(`/api/public/${window.TENANT_SLUG}/heartbeat/${this.displayConfig.id}`, { method:'POST' }).catch(()=>{});
         beat();
         setInterval(beat, 30000);
     }
 
     // ─── REMOTE CONTROL ──────────────────────────────────────────────
     startCommandPolling() {
-        if (!this.displayConfig?.id) return;
+        if (!this.displayConfig?.id || !window.TENANT_SLUG) return;
         const poll = async () => {
             try {
-                const res  = await fetch(`/api/displays/${this.displayConfig.id}/commands`);
+                const res  = await fetch(`/api/public/${window.TENANT_SLUG}/commands/${this.displayConfig.id}`);
                 const data = await res.json();
                 if (data.success && data.commands?.length) data.commands.forEach(cmd => this.executeCommand(cmd));
             } catch(e) {}
@@ -589,12 +734,14 @@ class MenuboardDisplay {
     // ─── ANALYTICS ───────────────────────────────────────────────────
     trackAnalytics() {
         const displayId = this.displayConfig?.id;
+        const tenantSlug = window.TENANT_SLUG;
+        if (!tenantSlug) return;
         this.zones.filter(z => z.type === 'menu').forEach(zone => {
             (zone.productIds||[]).forEach(id => {
-                fetch('/api/analytics/track', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({type:'product_view', id, displayId}) }).catch(()=>{});
+                fetch(`/api/public/${tenantSlug}/analytics`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({type:'product_view', id, displayId}) }).catch(()=>{});
             });
         });
-        if (displayId) fetch('/api/analytics/track', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({type:'display_view', displayId}) }).catch(()=>{});
+        if (displayId) fetch(`/api/public/${tenantSlug}/analytics`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({type:'display_view', displayId}) }).catch(()=>{});
     }
 
     // ─── KEYBOARD ────────────────────────────────────────────────────

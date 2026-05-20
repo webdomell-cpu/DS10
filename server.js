@@ -102,7 +102,8 @@ function getDefaultTenantData(tenant) {
         qrCodes: { enabled: true, baseUrl: '', showOnProducts: true, showOnDisplay: true },
         languages: { enabled: ['de', 'en'], default: 'de', showSelector: true },
         animations: { enabled: true, pageTransition: 'slide', productFadeIn: true, offerPulse: true, transitionDuration: 500 },
-        remoteControl: { enabled: true }
+        remoteControl: { enabled: true },
+        shapes: []
     };
 }
 
@@ -384,7 +385,45 @@ app.delete('/api/users/:id', authMiddleware(['tenantadmin']), tenantMiddleware, 
 });
 
 // ═══ TENANT: DATA ═══
-app.get('/api/data', authMiddleware(), tenantMiddleware, (req, res) => {
+// Public tenant resolver — finds tenant from JWT OR from display slug header
+function resolveTenant(req, res, next) {
+    // Try JWT first
+    const header = req.headers.authorization;
+    if (header?.startsWith('Bearer ')) {
+        try {
+            const decoded = jwt.verify(header.slice(7), JWT_SECRET);
+            req.user = decoded;
+            if (decoded.tenantId) {
+                const t = loadTenant(decoded.tenantId);
+                if (t) { req.tenant = t; req.tenantId = decoded.tenantId; return next(); }
+            }
+        } catch(e) {}
+    }
+    // Try tenant slug from query or header
+    const slug = req.query.tenantSlug || req.headers['x-tenant-slug'];
+    if (slug) {
+        const sa = loadSuperAdmin();
+        const meta = sa.tenants.find(t => t.slug === slug);
+        if (meta) {
+            const t = loadTenant(meta.id);
+            if (t) { req.tenant = t; req.tenantId = meta.id; return next(); }
+        }
+    }
+    // Try display ID from query
+    const displayId = req.query.displayId;
+    if (displayId) {
+        const sa = loadSuperAdmin();
+        for (const tm of sa.tenants) {
+            const td = loadTenant(tm.id);
+            if (!td) continue;
+            const d = (td.displays||[]).find(d => d.id === displayId || d.slug === displayId);
+            if (d) { req.tenant = td; req.tenantId = tm.id; return next(); }
+        }
+    }
+    return res.status(401).json({ error: 'Tenant nicht bestimmbar' });
+}
+
+app.get('/api/data', resolveTenant, (req, res) => {
     const { users, ...safeData } = req.tenant;
     res.json(safeData);
 });
@@ -468,7 +507,10 @@ app.get('/api/app-store', authMiddleware(), (req, res) => {
         { appId:'news-feed', name:'News Feed', description:'RSS-Nachrichten-Ticker', icon:'fas fa-newspaper', version:'1.0', author:'System', defaultDuration:20, category:'content', configSchema:{ feedUrl:{type:'text',label:'RSS-Feed URL',default:''}, itemCount:{type:'number',label:'Anzahl Nachrichten',default:5} } },
         { appId:'room-booking', name:'Raumbuchung', description:'Kalender & Raumverfügbarkeit', icon:'fas fa-calendar-check', version:'1.0', author:'System', defaultDuration:null, category:'business', configSchema:{ calendarUrl:{type:'text',label:'CalDAV/iCal URL',default:''}, roomName:{type:'text',label:'Raumname',default:'Konferenzraum'}, roomCapacity:{type:'number',label:'Kapazität',default:10} } },
         { appId:'countdown', name:'Countdown', description:'Countdown-Timer für Events', icon:'fas fa-hourglass-half', version:'1.0', author:'System', defaultDuration:null, category:'info', configSchema:{ targetDate:{type:'text',label:'Zieldatum (YYYY-MM-DD)',default:''}, targetLabel:{type:'text',label:'Bezeichnung',default:'Event'} } },
-        { appId:'social', name:'Social Feed', description:'Instagram & Social Media Feed', icon:'fab fa-instagram', version:'1.0', author:'System', defaultDuration:30, category:'social', configSchema:{ handle:{type:'text',label:'@Handle',default:''}, token:{type:'text',label:'Access Token',default:''}, postCount:{type:'number',label:'Anzahl Posts',default:4} } },
+        { appId:'menuboard', name:'Menüboard', description:'Digitales Speisekarten-Display mit Produkten, Preisen & Kategorien', icon:'fas fa-utensils', version:'1.0', author:'System', defaultDuration:null, category:'business',
+            configSchema:{ categoryFilter:{type:'text',label:'Kategorie-Filter (kommagetrennt)',default:''}, columns:{type:'select',label:'Spalten',options:['auto','2','3','4'],default:'auto'}, showImages:{type:'boolean',label:'Bilder anzeigen',default:true}, showPrices:{type:'boolean',label:'Preise anzeigen',default:true}, showBadges:{type:'boolean',label:'Badges anzeigen',default:true}, cardStyle:{type:'select',label:'Karten-Stil',options:['vertical','horizontal','compact'],default:'vertical'}, priceStyle:{type:'select',label:'Preis-Stil',options:['badge-gold','badge-dark','text-plain','text-bold'],default:'badge-gold'} } },
+        { appId:'social', name:'Social Feed', description:'Instagram & TikTok Feed', icon:'fab fa-instagram', version:'2.0', author:'System', defaultDuration:30, category:'social',
+            configSchema:{ platform:{type:'select',label:'Plattform',options:['instagram','tiktok'],default:'instagram'}, handle:{type:'text',label:'@Handle',default:''}, hashtag:{type:'text',label:'Hashtag (ohne #)',default:''}, token:{type:'text',label:'Access Token',default:''}, postCount:{type:'number',label:'Anzahl Posts',default:6}, layout:{type:'select',label:'Layout',options:['2x2','3x1','1-big','strip'],default:'2x2'}, showCaptions:{type:'boolean',label:'Beschriftungen',default:true}, showLikes:{type:'boolean',label:'Likes anzeigen',default:true}, refreshMin:{type:'number',label:'Refresh (Minuten)',default:15} } },
     ];
     res.json({ apps: available });
 });
@@ -557,7 +599,31 @@ app.get('/api/playlist-engine/:displayId', (req, res) => {
 });
 
 // ═══ TENANT: SCHEDULE ═══
-app.get('/api/schedule', authMiddleware(), tenantMiddleware, (req, res) => {
+// POST /api/schedules — save all schedules
+app.post('/api/schedules', authMiddleware(['tenantadmin','editor']), tenantMiddleware, (req, res) => {
+    req.tenant.schedules = req.body.schedules || [];
+    saveTenant(req.tenantId, req.tenant);
+    res.json({ success: true, schedules: req.tenant.schedules });
+});
+
+// PUT /api/schedules/:id — update single schedule
+app.put('/api/schedules/:id', authMiddleware(['tenantadmin','editor']), tenantMiddleware, (req, res) => {
+    if (!req.tenant.schedules) req.tenant.schedules = [];
+    const idx = req.tenant.schedules.findIndex(s => s.id === req.params.id);
+    if (idx !== -1) req.tenant.schedules[idx] = { ...req.tenant.schedules[idx], ...req.body, id: req.params.id };
+    else req.tenant.schedules.push({ ...req.body, id: req.params.id });
+    saveTenant(req.tenantId, req.tenant);
+    res.json({ success: true });
+});
+
+// DELETE /api/schedules/:id
+app.delete('/api/schedules/:id', authMiddleware(['tenantadmin','editor']), tenantMiddleware, (req, res) => {
+    req.tenant.schedules = (req.tenant.schedules||[]).filter(s => s.id !== req.params.id);
+    saveTenant(req.tenantId, req.tenant);
+    res.json({ success: true });
+});
+
+app.get('/api/schedule', resolveTenant, (req, res) => {
     const schedules = req.tenant.schedules || [];
     const now = new Date();
     const cd = now.getDay(), ct = now.getHours() * 60 + now.getMinutes();
@@ -571,7 +637,7 @@ app.get('/api/schedule', authMiddleware(), tenantMiddleware, (req, res) => {
 });
 
 // ═══ TENANT: WEATHER ═══
-app.get('/api/weather', async (req, res) => {
+app.get('/api/weather', async (req, res) => { // Public endpoint
     try {
         const lat = req.query.lat || '52.52', lon = req.query.lon || '13.41';
         const { default: fetch } = await import('node-fetch');
@@ -584,7 +650,7 @@ app.get('/api/weather', async (req, res) => {
 });
 
 // ═══ TENANT: ANALYTICS ═══
-app.post('/api/analytics/track', authMiddleware(), tenantMiddleware, (req, res) => {
+app.post('/api/analytics/track', resolveTenant, (req, res) => {
     const a = loadAnalytics(req.tenantId);
     const { type, id, displayId } = req.body;
     const now = new Date(), h = now.getHours(), day = now.toISOString().split('T')[0];
@@ -598,7 +664,7 @@ app.post('/api/analytics/track', authMiddleware(), tenantMiddleware, (req, res) 
     res.json({ success: true });
 });
 
-app.get('/api/analytics', authMiddleware(), tenantMiddleware, (req, res) => {
+app.get('/api/analytics', authMiddleware(), resolveTenant, (req, res) => {
     const a = loadAnalytics(req.tenantId);
     const productRanking = Object.entries(a.productViews).map(([id,views]) => {
         const p = (req.tenant.products||[]).find(p => String(p.id) === id);
@@ -636,6 +702,69 @@ app.delete('/api/uploads/:filename', authMiddleware(['tenantadmin','editor']), t
 });
 
 // ═══ PUBLIC DISPLAY PAGE ═══
+// Public API for displays — resolves tenant from URL
+app.get('/api/public/:tenantSlug/data', (req, res) => {
+    const sa = loadSuperAdmin();
+    const meta = sa.tenants.find(t => t.slug === req.params.tenantSlug);
+    if (!meta) return res.status(404).json({ error: 'Tenant nicht gefunden' });
+    const t = loadTenant(meta.id);
+    if (!t) return res.status(404).json({ error: 'Daten nicht gefunden' });
+    const { users, ...safeData } = t;
+    res.json(safeData);
+});
+app.get('/api/public/:tenantSlug/schedule', (req, res) => {
+    const sa = loadSuperAdmin();
+    const meta = sa.tenants.find(t => t.slug === req.params.tenantSlug);
+    if (!meta) return res.status(404).json({ error: 'Nicht gefunden' });
+    const t = loadTenant(meta.id);
+    const schedules = t?.schedules || [];
+    const now = new Date(); const cd = now.getDay(); const ct = now.getHours()*60+now.getMinutes();
+    const active = schedules.find(s => {
+        if (!s.active||!s.days?.includes(cd)) return false;
+        const [sh,sm]=(s.startTime||'00:00').split(':').map(Number);
+        const [eh,em]=(s.endTime||'23:59').split(':').map(Number);
+        return ct>=sh*60+sm&&ct<eh*60+em;
+    });
+    res.json({ activeSchedule: active||null, allSchedules: schedules });
+});
+app.post('/api/public/:tenantSlug/analytics', (req, res) => {
+    const sa = loadSuperAdmin();
+    const meta = sa.tenants.find(t => t.slug === req.params.tenantSlug);
+    if (!meta) return res.status(200).json({ success: false });
+    const a = loadAnalytics(meta.id);
+    const { type, id, displayId } = req.body;
+    const now = new Date(), h = now.getHours(), day = now.toISOString().split('T')[0];
+    if (type==='product_view'&&id) a.productViews[id]=(a.productViews[id]||0)+1;
+    if (displayId) a.displayViews[displayId]=(a.displayViews[displayId]||0)+1;
+    a.hourlyStats[`${day}_h${h}`]=(a.hourlyStats[`${day}_h${h}`]||0)+1;
+    a.dailyStats[day]=(a.dailyStats[day]||0)+1;
+    a.events.push({type,id,displayId,ts:now.toISOString()});
+    if(a.events.length>1000) a.events=a.events.slice(-1000);
+    saveAnalytics(meta.id, a);
+    res.json({ success: true });
+});
+app.get('/api/public/:tenantSlug/commands/:displayId', (req, res) => {
+    const sa = loadSuperAdmin();
+    const meta = sa.tenants.find(t => t.slug === req.params.tenantSlug);
+    if (!meta) return res.status(200).json({ success: true, commands: [] });
+    const t = loadTenant(meta.id);
+    const d = (t?.displays||[]).find(x => x.id === req.params.displayId);
+    if (!d) return res.json({ success: true, commands: [] });
+    const cmds = d.pendingCommands||[];
+    d.pendingCommands = [];
+    saveTenant(meta.id, t);
+    res.json({ success: true, commands: cmds });
+});
+app.post('/api/public/:tenantSlug/heartbeat/:displayId', (req, res) => {
+    const sa = loadSuperAdmin();
+    const meta = sa.tenants.find(t => t.slug === req.params.tenantSlug);
+    if (!meta) return res.status(200).json({ success: false });
+    const t = loadTenant(meta.id);
+    const d = (t?.displays||[]).find(x => x.id === req.params.displayId);
+    if (d) { d.lastSeen = new Date().toISOString(); saveTenant(meta.id, t); }
+    res.json({ success: true });
+});
+
 app.get('/display/:tenantSlug/:displaySlug', (req, res) => {
     const sa = loadSuperAdmin();
     const tenant = sa.tenants.find(t => t.slug === req.params.tenantSlug);
@@ -662,6 +791,7 @@ app.get('/display/:tenantSlug/:displaySlug', (req, res) => {
   <div id="displayContainer" class="display-container"></div>
   <script>
     window.DISPLAY_ID   = '${disp.id}';
+  window.TENANT_SLUG  = '${tenant.slug}';
     window.DISPLAY_SLUG = '${disp.slug}';
     window.TENANT_ID    = '${tenant.id}';
     window.TENANT_SLUG  = '${tenant.slug}';
@@ -697,7 +827,89 @@ async function initSuperAdmin() {
     }
 }
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '9.0', timestamp: new Date().toISOString() }));
+// Shapes (graphic elements in designer)
+app.get('/api/shapes', authMiddleware(), tenantMiddleware, (req,res) => res.json(req.tenant.shapes||[]));
+app.post('/api/shapes', authMiddleware(['tenantadmin','editor']), tenantMiddleware, (req,res) => {
+    req.tenant.shapes = req.body.shapes || [];
+    saveTenant(req.tenantId, req.tenant);
+    res.json({ success:true, shapes: req.tenant.shapes });
+});
+
+// Designer export — serve SVG/PNG
+app.post('/api/designer/export', authMiddleware(['tenantadmin','editor']), tenantMiddleware, (req,res) => {
+    const { svg, format='svg' } = req.body;
+    if (!svg) return res.status(400).json({ error:'Kein SVG' });
+    const filename = `design-${Date.now()}.${format}`;
+    const dir = path.join(UPLOADS_DIR, req.tenantId);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const fp = path.join(dir, filename);
+    fs.writeFileSync(fp, svg, 'utf8');
+    res.json({ success: true, url: `/uploads/${req.tenantId}/${filename}`, filename });
+});
+
+// Social feed app iframe (public)
+// Menuboard App (served as iframe)
+app.get('/app/menuboard', resolveTenant, (req, res) => {
+    const config = req.query;
+    const products = (req.tenant?.products || []);
+    const settings = req.tenant?.settings || {};
+    const currency = settings.currency || '€';
+    const cpos = settings.currencyPosition || 'after';
+    const fmt = p => cpos === 'before' ? `${currency} ${p}` : `${p} ${currency}`;
+    const catFilter = config.categoryFilter ? config.categoryFilter.split(',').map(c => c.trim()).filter(Boolean) : [];
+    const filtered = catFilter.length ? products.filter(p => catFilter.includes(p.category)) : products;
+    const cols = config.columns || 'auto';
+    const cardStyle = config.cardStyle || 'vertical';
+    const showImages = config.showImages !== 'false';
+    const showPrices = config.showPrices !== 'false';
+    const showBadges = config.showBadges !== 'false';
+    const priceStyle = config.priceStyle || 'badge-gold';
+    const theme = settings.theme || 'dark';
+    const font = settings.font || 'Inter';
+
+    const gridCols = cols === 'auto' ? (filtered.length <= 4 ? 2 : filtered.length <= 9 ? 3 : 4) : parseInt(cols);
+
+    const priceClass = {'badge-gold':'price-badge-gold','badge-dark':'price-badge-dark','text-plain':'price-plain','text-bold':'price-bold'}[priceStyle]||'price-badge-gold';
+
+    const cards = filtered.map(p => {
+        const sold = p.stockStatus === 'soldout';
+        const price = showPrices && !sold ? `<span class="${priceClass}">${fmt(p.price)}</span>` : '';
+        const badge = showBadges && p.badge ? `<span class="mb-badge">${p.badge}</span>` : '';
+        if (cardStyle === 'compact') return `<div class="mb-card mb-compact"><span class="mb-title">${p.title}</span>${price}</div>`;
+        if (cardStyle === 'horizontal') return `<div class="mb-card mb-horizontal">${showImages && p.image ? `<img src="${p.image}" class="mb-img-h">` : ''}<div class="mb-info">${badge}<div class="mb-title">${p.title}</div>${price}</div></div>`;
+        return `<div class="mb-card">${showImages && p.image ? `<div class="mb-img-wrap"><img src="${p.image}" class="mb-img">${sold?'<div class="mb-sold">AUSVERKAUFT</div>':''}</div>` : ''}<div class="mb-info">${badge}<div class="mb-title">${p.title}</div>${price}</div></div>`;
+    }).join('');
+
+    res.send(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=${font.replace(/ /g,'+')}:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;font-family:'${font}',system-ui,sans-serif;background:${theme==='light'?'#f0f2f5':theme==='burger'?'#1a0a00':theme==='coffee'?'#1a1200':'#0a0a0f'};color:${theme==='light'?'#1a1a2e':'#fff'};overflow:hidden}
+.mb-grid{display:grid;grid-template-columns:repeat(${gridCols},1fr);gap:10px;padding:12px;height:100%;align-content:start;overflow:hidden}
+.mb-card{background:${theme==='light'?'#fff':theme==='burger'?'#2a1500':theme==='coffee'?'#2a1f0a':'#141420'};border:1px solid ${theme==='light'?'#e0e0e0':'#2a2a3a'};border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+.mb-horizontal{flex-direction:row!important}
+.mb-compact{flex-direction:row!important;align-items:center;padding:10px 14px;justify-content:space-between}
+.mb-img-wrap{position:relative;padding-top:55%;background:rgba(0,0,0,.2);flex-shrink:0}
+.mb-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.mb-img-h{width:80px;height:100%;object-fit:cover;flex-shrink:0}
+.mb-sold{position:absolute;inset:0;background:rgba(0,0,0,.7);color:#f43f5e;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:clamp(8px,.8vw,12px);letter-spacing:.1em}
+.mb-info{padding:8px 10px;display:flex;flex-direction:column;gap:4px;flex:1}
+.mb-badge{font-size:clamp(7px,.65vw,10px);font-weight:700;padding:2px 7px;border-radius:10px;background:rgba(124,111,255,.2);color:#7c6fff;width:fit-content}
+.mb-title{font-weight:700;font-size:clamp(10px,.9vw,15px);line-height:1.2;color:${theme==='light'?'#1a1a2e':'#fff'}}
+.price-badge-gold{display:inline-block;background:#FFD700;color:#000;font-weight:800;font-size:clamp(10px,.9vw,15px);padding:3px 10px;border-radius:20px;margin-top:auto}
+.price-badge-dark{display:inline-block;background:rgba(0,0,0,.5);color:#FFD700;border:1px solid #FFD700;font-weight:700;font-size:clamp(10px,.9vw,15px);padding:3px 10px;border-radius:20px;margin-top:auto}
+.price-plain{font-size:clamp(11px,1vw,16px);font-weight:600;color:${theme==='light'?'#1a1a2e':'#fff'};margin-top:auto}
+.price-bold{font-size:clamp(12px,1.1vw,18px);font-weight:900;color:#FFD700;margin-top:auto}
+</style></head><body>
+<div class="mb-grid">${cards||'<div style="grid-column:1/-1;text-align:center;padding:40px;color:#666">Keine Produkte vorhanden</div>'}</div>
+</body></html>`);
+});
+
+app.get('/app/social-feed', (req,res) => {
+    res.sendFile(path.join(APPS_DIR, 'social-feed', 'app.html'));
+});
+
+app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '9.5', timestamp: new Date().toISOString() }));
 app.get('/', (req, res) => res.redirect('/admin/'));
 
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: err.message }); });

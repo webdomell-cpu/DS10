@@ -341,3 +341,10 @@ body.theme-coffee {
   pointer-events: none;
   z-index: 50; overflow: visible;
 }
+
+/* ─── MENUBOX & RSS SHAPES (v9.8) ─── */
+.shape-menubox { overflow:hidden; }
+.shape-rssfield-img { width:100%; height:100%; object-fit:cover; display:block; }
+.shape-rssfield-video { width:100%; height:100%; object-fit:cover; display:block; }
+.rss-autoscroll { animation: rss-fade 0.5s ease; }
+@keyframes rss-fade { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }

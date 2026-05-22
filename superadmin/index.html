@@ -167,6 +167,24 @@ input::placeholder,textarea::placeholder{color:var(--text3)}
       <div id="appStoreGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px"></div>
     </div>
 
+    <!-- GLOBAL MEDIA -->
+    <div class="tab-pane" id="tab-media">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div><h2 style="font-size:20px;font-weight:700">Globale Mediathek</h2><p style="font-size:13px;color:var(--text2);margin-top:2px">Assets für alle Mandanten verfügbar (read-only für Mandanten)</p></div>
+        <label class="btn btn-primary" style="cursor:pointer"><i class="fas fa-upload"></i> Hochladen<input type="file" id="globalMediaUpload" accept="image/*,video/*,image/svg+xml" multiple style="display:none"></label>
+      </div>
+      <div id="globalMediaGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px"></div>
+    </div>
+
+    <!-- DESIGNER TEMPLATES -->
+    <div class="tab-pane" id="tab-designer-templates">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div><h2 style="font-size:20px;font-weight:700">Designer-Vorlagen</h2><p style="font-size:13px;color:var(--text2);margin-top:2px">Globale Layouts für alle Mandanten</p></div>
+        <button class="btn btn-primary" onclick="sa.openCreateDesignerTemplate()"><i class="fas fa-plus"></i> Vorlage erstellen</button>
+      </div>
+      <div id="designerTemplatesGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px"></div>
+    </div>
+
     <!-- SETTINGS -->
     <div class="tab-pane" id="tab-settings">
       <div style="margin-bottom:16px"><h2 style="font-size:20px;font-weight:700">System-Einstellungen</h2></div>
@@ -391,6 +409,83 @@ const sa = {
         else toast(res?.error || 'Fehler', 'error');
     },
 
+    // GLOBAL MEDIA
+    async loadGlobalMedia() {
+        const res  = await api('GET', '/superadmin/media');
+        const files = res?.uploads || [];
+        const grid = document.getElementById('globalMediaGrid');
+        if (!grid) return;
+        grid.innerHTML = files.length ? files.map(f => {
+            const isVid = /\.(mp4|webm|mov)$/i.test(f.filename);
+            return `<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden">
+                <div style="height:100px;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden">
+                    ${isVid ? '<i class="fas fa-video" style="font-size:28px;color:#4a4a6a"></i>' : `<img src="${f.url}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">`}
+                </div>
+                <div style="padding:8px">
+                    <div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${f.filename}">${f.filename}</div>
+                    <div style="font-size:10px;color:var(--text3)">${(f.size/1024).toFixed(1)} KB</div>
+                    <div style="display:flex;gap:4px;margin-top:6px">
+                        <button class="btn btn-xs btn-ghost" onclick="navigator.clipboard.writeText('${f.url}');toast('URL kopiert!','success')"><i class="fas fa-copy"></i></button>
+                        <button class="btn btn-xs btn-danger" onclick="sa.deleteGlobalMedia('${f.filename}')"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+            </div>`;
+        }).join('') : '<div style="text-align:center;color:var(--text3);padding:40px;grid-column:1/-1">Noch keine globalen Medien</div>';
+    },
+
+    async deleteGlobalMedia(filename) {
+        if (!confirm('Datei löschen?')) return;
+        const res = await api('DELETE', `/superadmin/media/${filename}`);
+        if (res?.success) { toast('Gelöscht', 'success'); this.loadGlobalMedia(); }
+        else toast('Fehler', 'error');
+    },
+
+    // DESIGNER TEMPLATES
+    async loadDesignerTemplates() {
+        const res = await api('GET', '/superadmin/designer-templates');
+        const templates = res?.templates || [];
+        const grid = document.getElementById('designerTemplatesGrid');
+        if (!grid) return;
+        grid.innerHTML = templates.length ? templates.map(t => `<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden">
+            <div style="height:120px;background:#060608;position:relative;overflow:hidden;border-bottom:1px solid var(--border)">
+                ${(t.zones||[]).map(z=>`<div style="position:absolute;left:${z.x}%;top:${z.y}%;width:${z.w}%;height:${z.h}%;border:1px solid rgba(124,111,255,.4);background:rgba(124,111,255,.07);border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:9px;color:rgba(124,111,255,.6)">${z.type}</div>`).join('')}
+            </div>
+            <div style="padding:14px">
+                <div style="font-weight:600;font-size:14px">${t.name}</div>
+                <div style="font-size:12px;color:var(--text2);margin:4px 0 10px">${t.description||''}</div>
+                <div style="font-size:10px;color:var(--text3);margin-bottom:10px">${(t.zones||[]).length} Zonen · ${(t.shapes||[]).length} Grafikelemente · ${t.category||'allgemein'}</div>
+                <div style="display:flex;gap:6px">
+                    <button class="btn btn-sm btn-ghost" onclick="sa.editDesignerTemplate('${t.id}')"><i class="fas fa-pen"></i></button>
+                    <button class="btn btn-sm btn-danger" onclick="sa.deleteDesignerTemplate('${t.id}','${t.name}')"><i class="fas fa-trash"></i></button>
+                </div>
+            </div>
+        </div>`).join('') : '<div style="text-align:center;color:var(--text3);padding:40px;grid-column:1/-1">Noch keine globalen Designer-Vorlagen</div>';
+    },
+
+    openCreateDesignerTemplate() {
+        const name = prompt('Name der Vorlage:');
+        if (!name) return;
+        const desc = prompt('Beschreibung (optional):') || '';
+        const cat  = prompt('Kategorie (z.B. menuboard, hotel, info):') || 'allgemein';
+        api('POST', '/superadmin/designer-templates', { name, description: desc, category: cat, zones: [], shapes: [] })
+            .then(res => { if (res?.success) { toast('Vorlage erstellt!', 'success'); this.loadDesignerTemplates(); } });
+    },
+
+    async editDesignerTemplate(id) {
+        const name = prompt('Neuer Name (leer = unverändert):');
+        if (name === null) return;
+        const body = {};
+        if (name) body.name = name;
+        const res = await api('PUT', `/superadmin/designer-templates/${id}`, body);
+        if (res?.success) { toast('Aktualisiert', 'success'); this.loadDesignerTemplates(); }
+    },
+
+    async deleteDesignerTemplate(id, name) {
+        if (!confirm(`Vorlage "${name}" löschen?`)) return;
+        const res = await api('DELETE', `/superadmin/designer-templates/${id}`);
+        if (res?.success) { toast('Gelöscht', 'success'); this.loadDesignerTemplates(); }
+    },
+
     async changePassword() {
         const cur = document.getElementById('curPw').value;
         const nw = document.getElementById('newPw').value;
@@ -401,6 +496,18 @@ const sa = {
         else toast(res?.error || 'Fehler', 'error');
     }
 };
+
+// Global media upload
+document.getElementById('globalMediaUpload')?.addEventListener('change', async e => {
+    for (const file of Array.from(e.target.files||[])) {
+        const fd = new FormData(); fd.append('files', file);
+        const res = await fetch('/api/superadmin/media/upload', { method:'POST', headers:{'Authorization':'Bearer '+token}, body:fd });
+        const r   = await res.json();
+        if (r?.success) toast(`${file.name} hochgeladen!`, 'success');
+        else toast('Upload fehlgeschlagen', 'error');
+    }
+    sa.loadGlobalMedia();
+});
 
 // Init
 sa.loadDashboard();

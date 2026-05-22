@@ -686,15 +686,7 @@ app.post('/api/upload-multiple', authMiddleware(['tenantadmin','editor']), tenan
     if (!req.files?.length) return res.status(400).json({ error: 'Keine Dateien' });
     res.json({ success: true, files: req.files.map(f => ({ filename: f.filename, originalname: f.originalname, url: `/uploads/${req.tenantId}/${f.filename}`, size: f.size, mimetype: f.mimetype })) });
 });
-app.get('/api/uploads-list', authMiddleware(), tenantMiddleware, (req, res) => {
-    const dir = path.join(UPLOADS_DIR, req.tenantId);
-    if (!fs.existsSync(dir)) return res.json({ success: true, uploads: [] });
-    const files = fs.readdirSync(dir).filter(f => f !== '.gitkeep').map(f => {
-        const s = fs.statSync(path.join(dir, f));
-        return { filename: f, url: `/uploads/${req.tenantId}/${f}`, size: s.size, modified: s.mtime };
-    });
-    res.json({ success: true, uploads: files });
-});
+// /api/uploads-list replaced by enhanced version above
 app.delete('/api/uploads/:filename', authMiddleware(['tenantadmin','editor']), tenantMiddleware, (req, res) => {
     const fp = path.join(UPLOADS_DIR, req.tenantId, req.params.filename);
     if (fs.existsSync(fp)) { fs.unlinkSync(fp); res.json({ success: true }); }
@@ -909,7 +901,182 @@ app.get('/app/social-feed', (req,res) => {
     res.sendFile(path.join(APPS_DIR, 'social-feed', 'app.html'));
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '9.5', timestamp: new Date().toISOString() }));
+
+// ═══ GLOBAL MEDIA (SuperAdmin) ═══
+
+const GLOBAL_UPLOADS_DIR = path.join(UPLOADS_DIR, 'global');
+if (!fs.existsSync(GLOBAL_UPLOADS_DIR)) fs.mkdirSync(GLOBAL_UPLOADS_DIR, { recursive: true });
+
+const globalStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, GLOBAL_UPLOADS_DIR),
+    filename: (req, file, cb) => cb(null, Date.now() + '-' + uuidv4().slice(0,8) + path.extname(file.originalname))
+});
+const uploadGlobal = multer({ storage: globalStorage, limits: { fileSize: 100*1024*1024 },
+    fileFilter: (req, file, cb) => {
+        const ok = /jpeg|jpg|png|gif|mp4|webm|mov|svg|pdf/.test(path.extname(file.originalname).toLowerCase());
+        ok ? cb(null, true) : cb(new Error('Dateityp nicht erlaubt'));
+    }
+});
+
+app.get('/api/superadmin/media', authMiddleware(['superadmin']), (req, res) => {
+    try {
+        const files = fs.readdirSync(GLOBAL_UPLOADS_DIR).filter(f => f !== '.gitkeep').map(f => {
+            const s = fs.statSync(path.join(GLOBAL_UPLOADS_DIR, f));
+            return { filename: f, url: `/uploads/global/${f}`, size: s.size, modified: s.mtime, global: true };
+        });
+        res.json({ success: true, uploads: files });
+    } catch(e) { res.status(500).json({ success: false }); }
+});
+
+app.post('/api/superadmin/media/upload', authMiddleware(['superadmin']), uploadGlobal.array('files', 20), (req, res) => {
+    if (!req.files?.length) return res.status(400).json({ error: 'Keine Dateien' });
+    res.json({ success: true, files: req.files.map(f => ({ filename: f.filename, originalname: f.originalname, url: `/uploads/global/${f.filename}`, size: f.size, mimetype: f.mimetype, global: true })) });
+});
+
+app.delete('/api/superadmin/media/:filename', authMiddleware(['superadmin']), (req, res) => {
+    const fp = path.join(GLOBAL_UPLOADS_DIR, req.params.filename);
+    if (fs.existsSync(fp)) { fs.unlinkSync(fp); res.json({ success: true }); }
+    else res.status(404).json({ error: 'Nicht gefunden' });
+});
+
+// Tenant media: include global files
+app.get('/api/uploads-list', authMiddleware(), resolveTenant, (req, res) => {
+    try {
+        const tenantDir = path.join(UPLOADS_DIR, req.tenantId);
+        if (!fs.existsSync(tenantDir)) fs.mkdirSync(tenantDir, { recursive: true });
+        const tenantFiles = fs.readdirSync(tenantDir).filter(f => f !== '.gitkeep').map(f => {
+            const s = fs.statSync(path.join(tenantDir, f));
+            return { filename: f, url: `/uploads/${req.tenantId}/${f}`, size: s.size, modified: s.mtime, global: false };
+        });
+        const globalFiles = fs.readdirSync(GLOBAL_UPLOADS_DIR).filter(f => f !== '.gitkeep').map(f => {
+            const s = fs.statSync(path.join(GLOBAL_UPLOADS_DIR, f));
+            return { filename: f, url: `/uploads/global/${f}`, size: s.size, modified: s.mtime, global: true };
+        });
+        res.json({ success: true, uploads: [...tenantFiles, ...globalFiles] });
+    } catch(e) { res.status(500).json({ success: false }); }
+});
+
+
+// ═══ GLOBAL DESIGNER TEMPLATES ═══
+
+const GLOBAL_TEMPLATES_FILE = path.join(SUPERADMIN_DIR, 'global-designer-templates.json');
+
+function loadGlobalDesignerTemplates() {
+    try { if (fs.existsSync(GLOBAL_TEMPLATES_FILE)) return JSON.parse(fs.readFileSync(GLOBAL_TEMPLATES_FILE,'utf8')); }
+    catch(e) {}
+    return [];
+}
+function saveGlobalDesignerTemplates(templates) {
+    fs.writeFileSync(GLOBAL_TEMPLATES_FILE, JSON.stringify(templates, null, 2));
+}
+
+// SuperAdmin: list/create/update/delete global designer templates
+app.get('/api/superadmin/designer-templates', authMiddleware(['superadmin']), (req, res) => {
+    res.json({ templates: loadGlobalDesignerTemplates() });
+});
+app.post('/api/superadmin/designer-templates', authMiddleware(['superadmin']), (req, res) => {
+    const templates = loadGlobalDesignerTemplates();
+    const t = { id: uuidv4(), name: req.body.name || 'Neue Vorlage', description: req.body.description || '',
+        thumbnail: req.body.thumbnail || '', zones: req.body.zones || [], shapes: req.body.shapes || [],
+        category: req.body.category || 'allgemein', createdAt: new Date().toISOString(), global: true };
+    templates.push(t);
+    saveGlobalDesignerTemplates(templates);
+    res.json({ success: true, template: t });
+});
+app.put('/api/superadmin/designer-templates/:id', authMiddleware(['superadmin']), (req, res) => {
+    const templates = loadGlobalDesignerTemplates();
+    const idx = templates.findIndex(t => t.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Nicht gefunden' });
+    templates[idx] = { ...templates[idx], ...req.body, id: req.params.id, global: true, updatedAt: new Date().toISOString() };
+    saveGlobalDesignerTemplates(templates);
+    res.json({ success: true, template: templates[idx] });
+});
+app.delete('/api/superadmin/designer-templates/:id', authMiddleware(['superadmin']), (req, res) => {
+    const templates = loadGlobalDesignerTemplates();
+    saveGlobalDesignerTemplates(templates.filter(t => t.id !== req.params.id));
+    res.json({ success: true });
+});
+
+// Tenants: read global designer templates (read-only)
+app.get('/api/global-designer-templates', authMiddleware(), (req, res) => {
+    res.json({ templates: loadGlobalDesignerTemplates() });
+});
+
+
+// ═══ RSS PROXY with media extraction ═══
+app.get('/api/rss-proxy', async (req, res) => {
+    const feedUrl = req.query.url;
+    if (!feedUrl) return res.status(400).json({ error: 'URL fehlt' });
+    try {
+        const { default: fetch } = await import('node-fetch');
+        const r = await fetch(feedUrl, { headers: { 'User-Agent': 'SignageCMS/9.8 RSS Reader' }, timeout: 8000 });
+        if (!r.ok) throw new Error('Feed nicht erreichbar: ' + r.status);
+        const xml = await r.text();
+
+        // Parse XML — simple regex-based parser (no external deps)
+        const items = [];
+        const itemMatches = xml.matchAll(/<item[^>]*>([\s\S]*?)<\/item>/gi);
+        for (const m of itemMatches) {
+            const chunk = m[1];
+            const get   = (tag) => { const rx = new RegExp(`<${tag}[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/${tag}>|<${tag}[^>]*>([\s\S]*?)<\/${tag}>`, 'i'); const r2 = rx.exec(chunk); return r2 ? (r2[1]||r2[2]||'').trim() : ''; };
+            const attr  = (tag, a) => { const rx = new RegExp(`<${tag}[^>]*\s${a}=["']([^"']+)["']`, 'i'); const r2 = rx.exec(chunk); return r2 ? r2[1] : ''; };
+
+            const title       = get('title');
+            const description = get('description').replace(/<[^>]+>/g,'').substring(0,300);
+            const link        = get('link') || attr('link','href');
+            const pubDate     = get('pubDate') || get('dc:date') || '';
+            const category    = get('category');
+
+            // Image extraction: enclosure → media:content → media:thumbnail → og from description
+            let imageUrl = '';
+            const encType = attr('enclosure','type');
+            if (encType?.startsWith('image')) imageUrl = attr('enclosure','url');
+            if (!imageUrl) imageUrl = attr('media:content','url');
+            if (!imageUrl) imageUrl = attr('media:thumbnail','url');
+            if (!imageUrl) {
+                const imgRx = /<img[^>]+src=["']([^"']+)["']/i.exec(get('description'));
+                if (imgRx) imageUrl = imgRx[1];
+            }
+
+            // Video extraction
+            let videoUrl = '';
+            const encTypeV = attr('enclosure','type');
+            if (encTypeV?.startsWith('video')) videoUrl = attr('enclosure','url');
+            if (!videoUrl) { const mcType = attr('media:content','type'); if (mcType?.startsWith('video')) videoUrl = attr('media:content','url'); }
+
+            if (title) items.push({ title, description, link, pubDate, category, imageUrl, videoUrl, hasMedia: !!(imageUrl||videoUrl) });
+            if (items.length >= 20) break;
+        }
+
+        // Feed metadata
+        const feedTitle = (/<title[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title[^>]*>([^<]+)<\/title>/i.exec(xml)||[])[1]||'RSS Feed';
+
+        res.json({ success: true, feed: { title: feedTitle, url: feedUrl }, items });
+    } catch(e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+
+// ═══ SuperAdmin: App Store global config ═══
+const GLOBAL_APPS_FILE = path.join(SUPERADMIN_DIR, 'global-apps.json');
+function loadGlobalApps() {
+    try { if (fs.existsSync(GLOBAL_APPS_FILE)) return JSON.parse(fs.readFileSync(GLOBAL_APPS_FILE,'utf8')); } catch(e) {}
+    return null; // null = use defaults
+}
+function saveGlobalApps(apps) { fs.writeFileSync(GLOBAL_APPS_FILE, JSON.stringify(apps,null,2)); }
+
+app.get('/api/superadmin/app-store', authMiddleware(['superadmin']), (req, res) => {
+    const custom = loadGlobalApps();
+    res.json({ apps: custom || [], usingDefaults: !custom });
+});
+app.post('/api/superadmin/app-store', authMiddleware(['superadmin']), (req, res) => {
+    saveGlobalApps(req.body.apps || []);
+    res.json({ success: true });
+});
+
+
+app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '9.8', timestamp: new Date().toISOString() }));
 app.get('/', (req, res) => res.redirect('/admin/'));
 
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: err.message }); });

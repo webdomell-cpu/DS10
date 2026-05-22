@@ -146,8 +146,16 @@
       <!-- MEDIA -->
       <div class="tab-pane" id="tab-media">
         <div class="pane-header">
-          <div><h2>Mediathek</h2><p>Bilder & Videos</p></div>
+          <div><h2>Mediathek</h2><p>Eigene & globale Medien</p></div>
           <label class="btn btn-primary viewer-hidden"><i class="fas fa-upload"></i> Hochladen<input type="file" id="mediaUpload" accept="image/*,video/*" multiple style="display:none"></label>
+        </div>
+        <div class="toolbar" style="margin-bottom:14px">
+          <select class="select-sm" id="mediaFilter" onchange="admin.loadMedia()">
+            <option value="all">Alle Medien</option>
+            <option value="own">Nur eigene</option>
+            <option value="global">Nur globale</option>
+          </select>
+          <span style="font-size:12px;color:var(--text-2);margin-left:8px" id="mediaCount"></span>
         </div>
         <div class="media-grid" id="mediaGrid"></div>
       </div>
@@ -177,8 +185,16 @@
       <!-- TEMPLATES -->
       <div class="tab-pane" id="tab-templates">
         <div class="pane-header">
-          <div><h2>Templates</h2><p>Layout-Vorlagen</p></div>
-          <button class="btn btn-primary viewer-hidden" id="addTemplateBtn"><i class="fas fa-plus"></i> Template</button>
+          <div><h2>Templates</h2><p>Layout-Vorlagen & globale Vorlagen</p></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm viewer-hidden" onclick="admin.saveCurrentAsGlobalTemplate()"><i class="fas fa-globe"></i> Als globale Vorlage speichern</button>
+            <button class="btn btn-primary viewer-hidden" id="addTemplateBtn"><i class="fas fa-plus"></i> Template</button>
+          </div>
+        </div>
+        <div style="margin-bottom:16px">
+          <h3 style="font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:10px;display:flex;align-items:center;gap:7px"><i class="fas fa-globe" style="color:var(--green)"></i> Globale Vorlagen (vom SuperAdmin)</h3>
+          <div class="templates-grid" id="globalTemplatesGrid" style="margin-bottom:20px"><div style="color:var(--text-2);font-size:13px;padding:8px">Lade…</div></div>
+          <h3 style="font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:10px;display:flex;align-items:center;gap:7px"><i class="fas fa-table-cells-large"></i> Meine Templates</h3>
         </div>
         <div class="templates-grid" id="templatesGrid"></div>
       </div>
@@ -204,6 +220,9 @@
                 <button class="tool-btn" id="toolAddText"><i class="fas fa-font"></i> Text Zone</button>
                 <button class="tool-btn" id="toolAddClock"><i class="fas fa-clock"></i> Uhr Zone</button>
                 <button class="tool-btn" id="toolAddApp"><i class="fas fa-puzzle-piece"></i> App Zone</button>
+              <div class="tool-group-label" style="margin-top:8px">Neue Elemente</div>
+              <button class="tool-btn" id="toolAddMenubox"><i class="fas fa-box-open"></i> Menübox</button>
+              <button class="tool-btn" id="toolAddRssField"><i class="fas fa-rss"></i> RSS-Feld</button>
               </div>
             </div>
 

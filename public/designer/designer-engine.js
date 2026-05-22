@@ -560,3 +560,174 @@ class DesignerEngine {
 }
 
 window.DesignerEngine = DesignerEngine;
+
+// ═══════════════════════════════════════════════════════════════
+//  EXTENDED ELEMENT TYPES v9.8
+//  - menubox: single product card, fully configurable
+//  - rssfield: single RSS feed field (title/desc/image)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Create a menubox shape — a single product card
+ * @param {Object} ds - draw state {x,y,w,h}
+ * @param {Object} product - product object from tenant data
+ */
+DesignerEngine.prototype.createMenubox = function(ds, product = null) {
+    const id = 'shape-' + Date.now();
+    return {
+        id, tool: 'menubox',
+        x: ds.x, y: ds.y,
+        w: Math.max(ds.w || 300, 120),
+        h: Math.max(ds.h || 200, 80),
+        opacity: 1, locked: false, zIndex: this.shapes.length,
+        // Product reference
+        productId:   product?.id   || null,
+        productData: product       || null,  // cached snapshot
+        // Visible fields
+        showImage:   true,
+        showTitle:   true,
+        showPrice:   true,
+        showBadge:   true,
+        showDescription: false,
+        showStock:   false,
+        // Style
+        priceStyle:  'badge-gold',
+        cardBg:      '#141420',
+        cardBorder:  '#2a2a3a',
+        cornerRadius: 10,
+        shadow:      true,
+        shadowX: 4, shadowY: 4, shadowBlur: 12,
+        shadowColor: 'rgba(0,0,0,.5)',
+        fontSize:    16,
+        fontWeight:  '700',
+        textColor:   '#ffffff',
+        currency:    '€',
+        currencyPos: 'after',
+    };
+};
+
+/**
+ * Create an RSS field shape — shows one field from RSS feed
+ * @param {Object} ds - draw state
+ * @param {Object} opts - { feedUrl, field: 'title'|'description'|'image'|'video', itemIndex }
+ */
+DesignerEngine.prototype.createRssField = function(ds, opts = {}) {
+    const id = 'shape-' + Date.now();
+    return {
+        id, tool: 'rssfield',
+        x: ds.x, y: ds.y,
+        w: Math.max(ds.w || 400, 100),
+        h: Math.max(ds.h || 80, 40),
+        opacity: 1, locked: false, zIndex: this.shapes.length,
+        // RSS config
+        feedUrl:    opts.feedUrl   || '',
+        field:      opts.field     || 'title',   // title | description | image | video
+        itemIndex:  opts.itemIndex || 0,          // which item (0 = latest)
+        // Scroll through items
+        autoScroll: false,
+        scrollInterval: 8,  // seconds per item
+        // Style (for text fields)
+        fontSize:   opts.field === 'title' ? 28 : 16,
+        fontWeight: opts.field === 'title' ? '700' : '400',
+        textColor:  '#ffffff',
+        textAlign:  'left',
+        fill:       'transparent',
+        cornerRadius: 0,
+        objectFit:  'cover',  // for image field
+        // Display
+        showFeedTitle: true,
+        maxLines:   opts.field === 'title' ? 2 : 4,
+    };
+};
+
+// Add to _createShape dispatcher
+const _origCreateShape = DesignerEngine.prototype._createShape;
+DesignerEngine.prototype._createShape = function(tool, ds) {
+    if (tool === 'menubox')  return this.createMenubox(ds, this._pendingProduct || null);
+    if (tool === 'rssfield') return this.createRssField(ds, this._pendingRssOpts || {});
+    return _origCreateShape.call(this, tool, ds);
+};
+
+// Render menubox in SVG (as foreignObject with HTML card)
+const _origRenderShapes = DesignerEngine.prototype.renderShapes;
+DesignerEngine.prototype.renderShapes = function() {
+    _origRenderShapes.call(this);
+    // Additional passes for menubox + rssfield (rendered as foreignObjects)
+    const ns = 'http://www.w3.org/2000/svg';
+    this.shapes.filter(s => s.tool === 'menubox' || s.tool === 'rssfield').forEach(s => {
+        // Remove existing rendering if already done by base
+        const existing = this.svg.querySelector(`[data-shape-id="${s.id}"]`);
+        if (existing) existing.remove();
+
+        const fo = document.createElementNS(ns, 'foreignObject');
+        fo.setAttribute('x', s.x); fo.setAttribute('y', s.y);
+        fo.setAttribute('width', s.w); fo.setAttribute('height', s.h);
+        fo.setAttribute('data-shape-id', s.id);
+        fo.setAttribute('opacity', s.opacity ?? 1);
+        fo.style.cssText = `cursor:${s.locked?'default':'move'};pointer-events:all;overflow:hidden;`;
+
+        const div = document.createElement('div');
+        div.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+        div.style.cssText = `width:100%;height:100%;`;
+
+        if (s.tool === 'menubox') {
+            div.innerHTML = this._renderMenuboxHtml(s);
+        } else if (s.tool === 'rssfield') {
+            div.innerHTML = this._renderRssFieldHtml(s);
+        }
+
+        fo.appendChild(div);
+        fo.addEventListener('click',      e => { e.stopPropagation(); this.select(s.id); });
+        fo.addEventListener('mousedown',  e => { if (!s.locked) this._startShapeDrag(e, s); });
+        this.svg.appendChild(fo);
+
+        if (this.selected === s.id) this._drawSelectionRing(s);
+        if (this.selected === s.id && !s.locked) this._drawResizeHandle(s);
+    });
+};
+
+DesignerEngine.prototype._renderMenuboxHtml = function(s) {
+    const p      = s.productData;
+    const cur    = s.currency || '€';
+    const cpos   = s.currencyPos || 'after';
+    const price  = p?.price ? (cpos === 'before' ? `${cur} ${p.price}` : `${p.price} ${cur}`) : '0.00 €';
+    const priceStyles = {
+        'badge-gold': `background:#FFD700;color:#000;font-weight:800;padding:3px 10px;border-radius:20px;`,
+        'badge-dark': `background:rgba(0,0,0,.5);color:#FFD700;border:1px solid #FFD700;padding:3px 10px;border-radius:20px;`,
+        'text-plain': `color:#fff;font-weight:600;`,
+        'text-bold':  `color:#FFD700;font-weight:900;font-size:1.2em;`,
+    };
+    const pCss = priceStyles[s.priceStyle] || priceStyles['badge-gold'];
+    const shadow = s.shadow ? `box-shadow:${s.shadowX}px ${s.shadowY}px ${s.shadowBlur}px ${s.shadowColor};` : '';
+
+    return `<div style="width:100%;height:100%;background:${s.cardBg||'#141420'};border:1px solid ${s.cardBorder||'#2a2a3a'};border-radius:${s.cornerRadius||10}px;overflow:hidden;display:flex;flex-direction:column;${shadow}box-sizing:border-box;">
+        ${s.showImage && p?.image ? `<div style="flex-shrink:0;height:55%;overflow:hidden;position:relative;"><img src="${p.image}" style="width:100%;height:100%;object-fit:cover;" onerror="this.parentNode.innerHTML='<div style=height:100%;background:#1e1e2e;display:flex;align-items:center;justify-content:center;font-size:28px>🍽️</div>'"></div>` : s.showImage ? `<div style="flex-shrink:0;height:55%;background:#1e1e2e;display:flex;align-items:center;justify-content:center;font-size:32px;">🍽️</div>` : ''}
+        <div style="padding:8px 10px;display:flex;flex-direction:column;gap:4px;flex:1;overflow:hidden;">
+            ${s.showBadge && p?.badge ? `<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:rgba(124,111,255,.2);color:#7c6fff;width:fit-content">${p.badge}</span>` : ''}
+            ${s.showTitle ? `<div style="font-weight:${s.fontWeight||700};font-size:${s.fontSize||16}px;color:${s.textColor||'#fff'};line-height:1.2;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${p?.title || 'Produktname'}</div>` : ''}
+            ${s.showDescription && p?.description ? `<div style="font-size:12px;color:#b0b0c8;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${p.description}</div>` : ''}
+            ${s.showPrice ? `<div style="margin-top:auto"><span style="font-size:${(s.fontSize||16)+2}px;${pCss}">${p?.stockStatus==='soldout'?'AUSVERKAUFT':price}</span></div>` : ''}
+        </div>
+    </div>`;
+};
+
+DesignerEngine.prototype._renderRssFieldHtml = function(s) {
+    const label = { title:'Titel', description:'Beschreibung', image:'Bild', video:'Video' }[s.field] || s.field;
+    const bg = s.fill && s.fill !== 'transparent' ? `background:${s.fill};` : '';
+    const r  = s.cornerRadius ? `border-radius:${s.cornerRadius}px;` : '';
+
+    if (s.field === 'image' || s.field === 'video') {
+        return `<div style="width:100%;height:100%;${bg}${r}overflow:hidden;display:flex;align-items:center;justify-content:center;background:${s.fill||'#1e1e2e'};">
+            <div style="text-align:center;color:#6a6a8a;font-size:12px;">
+                <div style="font-size:28px;margin-bottom:6px;">${s.field==='image'?'🖼️':'🎬'}</div>
+                RSS ${label}<br><small>${s.feedUrl ? s.feedUrl.split('/').slice(0,3).join('/') : 'Feed-URL konfigurieren'}</small>
+            </div>
+        </div>`;
+    }
+    // Text field preview
+    const preview = s.field === 'title' ? 'Aktuelle Überschrift aus dem Feed' : 'Beschreibungstext aus dem RSS-Feed wird hier angezeigt...';
+    const justify = s.textAlign==='center'?'center':s.textAlign==='right'?'flex-end':'flex-start';
+    return `<div style="width:100%;height:100%;${bg}${r}display:flex;align-items:center;justify-content:${justify};padding:8px;box-sizing:border-box;overflow:hidden;">
+        <span style="font-size:${s.fontSize||16}px;font-weight:${s.fontWeight||400};color:${s.textColor||'#fff'};line-height:1.4;text-align:${s.textAlign||'left'};overflow:hidden;display:-webkit-box;-webkit-line-clamp:${s.maxLines||3};-webkit-box-orient:vertical;">${preview}</span>
+    </div>`;
+};

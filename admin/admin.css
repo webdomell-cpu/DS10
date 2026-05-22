@@ -764,3 +764,18 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 /* ── PROP PANEL SCROLLBAR ── */
 .properties-panel::-webkit-scrollbar { width: 4px; }
 .properties-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ─── v9.8 ADDITIONS ─── */
+.media-card--global { border-color: rgba(34,211,164,.3); }
+.media-card--global:hover { border-color: rgba(34,211,164,.6); }
+.media-thumb { position: relative; }
+.media-global-badge {
+  position:absolute; top:4px; left:4px;
+  background:rgba(34,211,164,.85); color:#000;
+  font-size:9px; font-weight:700; padding:2px 6px;
+  border-radius:6px; backdrop-filter:blur(4px);
+}
+.toggle-row {
+  display:flex; align-items:center; gap:8px;
+  font-size:12px; cursor:pointer; padding:3px 0;
+}

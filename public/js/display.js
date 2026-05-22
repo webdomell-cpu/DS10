@@ -304,7 +304,96 @@ class MenuboardDisplay {
             if (el) { setCommon(el); svg.appendChild(el); }
         });
 
+        // menubox shapes (rendered as HTML overlays, not SVG)
+        const menuboxShapes = shapes.filter(s => s.tool === 'menubox' || s.tool === 'rssfield');
+        menuboxShapes.forEach(s => {
+            const wrapper = document.createElement('div');
+            wrapper.dataset.shapeId = s.id;
+            wrapper.style.cssText = `position:absolute;left:${s.x/1920*100}%;top:${s.y/1080*100}%;width:${s.w/1920*100}%;height:${s.h/1080*100}%;opacity:${s.opacity??1};pointer-events:none;z-index:51;overflow:hidden;`;
+
+            if (s.tool === 'menubox') {
+                wrapper.innerHTML = this._renderMenuboxHtml(s);
+            } else if (s.tool === 'rssfield') {
+                wrapper.innerHTML = this._renderRssFieldPlaceholder(s);
+                this._loadRssField(s, wrapper);
+            }
+            container.appendChild(wrapper);
+        });
+
         container.appendChild(svg);
+    }
+
+    _renderMenuboxHtml(s) {
+        const p      = s.productData || this.products.find(x => String(x.id) === String(s.productId));
+        const cur    = s.currency || this.settings.currency || '€';
+        const cpos   = s.currencyPos || this.settings.currencyPosition || 'after';
+        const price  = p?.price ? (cpos === 'before' ? `${cur} ${p.price}` : `${p.price} ${cur}`) : '';
+        const priceStyles = {
+            'badge-gold': 'background:#FFD700;color:#000;font-weight:800;padding:3px 10px;border-radius:20px;display:inline-block',
+            'badge-dark': 'background:rgba(0,0,0,.5);color:#FFD700;border:1px solid #FFD700;padding:3px 10px;border-radius:20px;display:inline-block',
+            'text-plain': 'color:#fff;font-weight:600;display:inline-block',
+            'text-bold':  'color:#FFD700;font-weight:900;font-size:1.2em;display:inline-block',
+        };
+        const pCss   = priceStyles[s.priceStyle] || priceStyles['badge-gold'];
+        const shadow = s.shadow ? `box-shadow:${s.shadowX||4}px ${s.shadowY||4}px ${s.shadowBlur||12}px ${s.shadowColor||'rgba(0,0,0,.5)'}` : '';
+        return `<div style="width:100%;height:100%;background:${s.cardBg||'#141420'};border:1px solid ${s.cardBorder||'#2a2a3a'};border-radius:${s.cornerRadius||10}px;overflow:hidden;display:flex;flex-direction:column;${shadow};box-sizing:border-box">
+            ${s.showImage && p?.image ? `<div style="flex-shrink:0;height:55%;overflow:hidden"><img src="${p.image}" style="width:100%;height:100%;object-fit:cover" onerror="this.parentNode.innerHTML='<div style=height:100%;background:#1e1e2e;display:flex;align-items:center;justify-content:center;font-size:clamp(20px,3vw,40px)>🍽️</div>'"></div>` : s.showImage ? `<div style="flex-shrink:0;height:55%;background:#1e1e2e;display:flex;align-items:center;justify-content:center;font-size:clamp(20px,3vw,40px)">🍽️</div>` : ''}
+            <div style="padding:clamp(6px,1vw,12px);display:flex;flex-direction:column;gap:4px;flex:1;overflow:hidden">
+                ${s.showBadge && p?.badge ? `<span style="font-size:clamp(8px,.7vw,11px);font-weight:700;padding:2px 7px;border-radius:10px;background:rgba(124,111,255,.2);color:#7c6fff;width:fit-content">${p.badge}</span>` : ''}
+                ${s.showTitle !== false ? `<div style="font-weight:${s.fontWeight||700};font-size:clamp(10px,${(s.fontSize||16)/19.2}vw,${s.fontSize||16}px);color:${s.textColor||'#fff'};line-height:1.2;overflow:hidden">${p?.title || '—'}</div>` : ''}
+                ${s.showDescription && p?.description ? `<div style="font-size:clamp(9px,.8vw,12px);color:#b0b0c8;line-height:1.3;overflow:hidden">${p.description}</div>` : ''}
+                ${s.showPrice !== false && price ? `<div style="margin-top:auto"><span style="${pCss};font-size:clamp(10px,${((s.fontSize||16)+2)/19.2}vw,${(s.fontSize||16)+2}px">${p?.stockStatus==='soldout'?'AUSVERKAUFT':price}</span></div>` : ''}
+            </div>
+        </div>`;
+    }
+
+    _renderRssFieldPlaceholder(s) {
+        if (s.field === 'image') return `<div style="width:100%;height:100%;background:#1e1e2e;display:flex;align-items:center;justify-content:center;border-radius:${s.cornerRadius||0}px"><i class="fas fa-image" style="font-size:clamp(20px,3vw,40px);color:#4a4a6a"></i></div>`;
+        if (s.field === 'video') return `<div style="width:100%;height:100%;background:#000;display:flex;align-items:center;justify-content:center;border-radius:${s.cornerRadius||0}px"><i class="fas fa-film" style="font-size:clamp(20px,3vw,40px);color:#4a4a6a"></i></div>`;
+        return `<div style="width:100%;height:100%;display:flex;align-items:center;padding:8px;background:${s.fill&&s.fill!=='transparent'?s.fill:'transparent'};border-radius:${s.cornerRadius||0}px"><span style="font-size:clamp(10px,${(s.fontSize||16)/19.2}vw,${s.fontSize||16}px);color:${s.textColor||'#fff'};font-weight:${s.fontWeight||400}">Lade RSS…</span></div>`;
+    }
+
+    async _loadRssField(s, wrapper) {
+        if (!s.feedUrl) return;
+        try {
+            const res  = await fetch(`/api/rss-proxy?url=${encodeURIComponent(s.feedUrl)}`);
+            const data = await res.json();
+            if (!data.success || !data.items?.length) return;
+
+            const items = data.items;
+            let idx     = Math.min(s.itemIndex || 0, items.length - 1);
+
+            const render = () => {
+                const item = items[idx];
+                if (!item) return;
+
+                if (s.field === 'image') {
+                    if (!item.imageUrl) return;
+                    wrapper.innerHTML = `<img src="${item.imageUrl}" class="shape-rssfield-img" style="border-radius:${s.cornerRadius||0}px;object-fit:${s.objectFit||'cover'}" onerror="this.style.display='none'">`;
+                } else if (s.field === 'video') {
+                    if (!item.videoUrl) return;
+                    wrapper.innerHTML = `<video src="${item.videoUrl}" class="shape-rssfield-video" autoplay muted loop playsinline style="border-radius:${s.cornerRadius||0}px"></video>`;
+                } else {
+                    const text = s.field === 'title' ? item.title : item.description;
+                    if (!text) return;
+                    const justify = s.textAlign==='center'?'center':s.textAlign==='right'?'flex-end':'flex-start';
+                    const bg = s.fill && s.fill !== 'transparent' ? `background:${s.fill}` : '';
+                    wrapper.innerHTML = `<div class="rss-autoscroll" style="width:100%;height:100%;display:flex;align-items:center;justify-content:${justify};padding:8px;${bg};border-radius:${s.cornerRadius||0}px;box-sizing:border-box;overflow:hidden">
+                        <span style="font-size:clamp(10px,${(s.fontSize||16)/19.2}vw,${s.fontSize||16}px);color:${s.textColor||'#fff'};font-weight:${s.fontWeight||400};text-align:${s.textAlign||'left'};line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:${s.maxLines||3};-webkit-box-orient:vertical">${text}</span>
+                    </div>`;
+                }
+
+                // Auto-scroll
+                if (s.autoScroll && s.scrollInterval > 0 && items.length > 1) {
+                    setTimeout(() => {
+                        idx = (idx + 1) % items.length;
+                        render();
+                    }, s.scrollInterval * 1000);
+                }
+            };
+
+            render();
+        } catch(e) { console.warn('RSS field load error:', e); }
     }
 
     // ─── MENU ZONE ───────────────────────────────────────────────────

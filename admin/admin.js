@@ -149,7 +149,7 @@ class MenuboardAdmin {
         _on('saveTemplateBtn', 'click', () => this.saveTemplate());
 
         // Designer tools
-        const toolMap = { toolAddMenu:'menu', toolAddMedia:'media', toolAddTicker:'ticker', toolAddText:'text', toolAddClock:'clock', toolAddApp:'app' };
+        const toolMap = { toolAddMenu:'menu', toolAddMedia:'media', toolAddTicker:'ticker', toolAddText:'text', toolAddClock:'clock', toolAddApp:'app', toolAddMenubox:'menubox', toolAddRssField:'rssfield' };
         Object.entries(toolMap).forEach(([id, type]) => _on(id, 'click', () => this.addZone(type)));
         _on('zoomIn',  'click', () => this.zoomCanvas(0.1));
         _on('zoomOut', 'click', () => this.zoomCanvas(-0.1));
@@ -448,11 +448,58 @@ class MenuboardAdmin {
     }
 
     // ─── TEMPLATES ───────────────────────────────────────────────────
+    async loadGlobalDesignerTemplates() {
+        const res = await CMS.api('GET', '/global-designer-templates');
+        return res?.templates || [];
+    }
+
+    async openGlobalDesignerTemplate(tpl) {
+        if (!confirm(`Globale Vorlage "${tpl.name}" laden?
+Aktuelle Zonen & Shapes werden überschrieben.`)) return;
+        if (tpl.zones?.length) this.zones = JSON.parse(JSON.stringify(tpl.zones));
+        if (tpl.shapes?.length) {
+            this.shapes = JSON.parse(JSON.stringify(tpl.shapes));
+            if (window.designerEngine) window.designerEngine.loadShapes(this.shapes);
+        }
+        this.switchTab('designer');
+        setTimeout(() => this.renderDesignerCanvas(), 100);
+        this.showToast(`"${tpl.name}" geladen!`, 'success');
+    }
+
+    async saveCurrentAsGlobalTemplate() {
+        const name = prompt('Name für die globale Vorlage:');
+        if (!name) return;
+        const desc = prompt('Beschreibung (optional):') || '';
+        const res = await CMS.api('POST', '/global-designer-templates', {
+            name, description: desc,
+            zones: this.zones, shapes: this.shapes,
+            category: 'mandant-erstellt'
+        });
+        if (res?.success) this.showToast('Vorlage gespeichert!', 'success');
+        else this.showToast('Fehler beim Speichern', 'error');
+    }
+
     renderTemplates() {
         const grid = document.getElementById('templatesGrid');
         if (!grid) return;
         const pills = document.getElementById('templateButtons');
         if (pills) pills.innerHTML = this.templates.map(t => `<button class="template-pill-btn" onclick="admin.applyTemplate('${t.id}')">${t.name}</button>`).join('');
+        // Load & show global designer templates
+        this.loadGlobalDesignerTemplates().then(globalTpls => {
+            const globalEl = document.getElementById('globalTemplatesGrid');
+            if (!globalEl) return;
+            globalEl.innerHTML = globalTpls.length ? globalTpls.map(t => `<div class="template-card" style="border-color:rgba(34,211,164,.3)">
+                <div class="template-preview" style="border-bottom:1px solid rgba(34,211,164,.2)">${(t.zones||[]).map(z=>`<div class="template-zone-preview" style="left:${z.x}%;top:${z.y}%;width:${z.w}%;height:${z.h}%;border-color:rgba(34,211,164,.4)">${z.type}</div>`).join('')}</div>
+                <div class="template-card-body">
+                    <div class="template-card-name">🌐 ${t.name}</div>
+                    <div class="template-card-desc">${t.description||''} <span style="font-size:10px;color:var(--green);font-weight:600">Globale Vorlage</span></div>
+                    <div class="template-card-actions">
+                        <button class="btn btn-ghost btn-sm" onclick="admin.openGlobalDesignerTemplate(${JSON.stringify(t).replace(/"/g,'&quot;')})"><i class="fas fa-download"></i> Laden</button>
+                    </div>
+                </div>
+            </div>`).join('') : '<div style="color:var(--text-2);font-size:13px;padding:12px">Keine globalen Vorlagen vorhanden</div>';
+        });
+
         grid.innerHTML = this.templates.map(t => `<div class="template-card ${t.isDefault?'is-default':''}">
             <div class="template-preview">${(t.zones||[]).map(z => `<div class="template-zone-preview" style="left:${z.x}%;top:${z.y}%;width:${z.w}%;height:${z.h}%">${z.type}</div>`).join('')}</div>
             <div class="template-card-body">
@@ -539,6 +586,9 @@ class MenuboardAdmin {
             if (e.target === canvas) { this.selectedZone = null; _setText('selectedZone', 'Keine Zone'); document.querySelectorAll('.zone-card').forEach(x => x.classList.remove('selected')); }
         });
 
+        // Pass products to engine for menubox picker
+        window._designerProducts = this.products || [];
+
         // Designer engine for graphic shapes
         if (window.DesignerEngine) {
             window.designerEngine = new DesignerEngine('designerCanvas', {
@@ -589,6 +639,23 @@ class MenuboardAdmin {
     }
 
     addZone(type) {
+        // Special types go to designer engine as shapes
+        if (type === 'menubox') {
+            if (!window.designerEngine) { this.showToast('Öffne zuerst den Designer', 'error'); return; }
+            window.designerEngine._pendingProduct = this.products[0] || null;
+            window.designerEngine.setTool('menubox');
+            this.showToast('Menübox: Auf Canvas zeichnen', 'info');
+            return;
+        }
+        if (type === 'rssfield') {
+            if (!window.designerEngine) { this.showToast('Öffne zuerst den Designer', 'error'); return; }
+            const feedUrl = prompt('RSS Feed URL:', 'https://feeds.bbci.co.uk/news/rss.xml') || '';
+            const field   = prompt('Feld anzeigen (title / description / image / video):', 'title') || 'title';
+            window.designerEngine._pendingRssOpts = { feedUrl, field };
+            window.designerEngine.setTool('rssfield');
+            this.showToast('RSS-Feld: Auf Canvas zeichnen', 'info');
+            return;
+        }
         const zone = { id:'zone-'+Date.now(), name: type.charAt(0).toUpperCase()+type.slice(1)+' Zone', type,
             x:10, y:10, w:30, h:20, visible:true, productIds:[], tickerText:'',
             articleStyle:{showImage:true,showTitle:true,showPrice:true,showDescription:false,showBadge:true,showStock:true,pricePosition:'bottom-right',priceStyle:'badge-gold',imageSize:'large',cardLayout:'vertical',textAlign:'left',columnsCount:'auto'} };
@@ -712,17 +779,33 @@ class MenuboardAdmin {
         const res     = await CMS.api('GET', '/uploads-list');
         const uploads = res?.uploads || [];
         const grid    = document.getElementById('mediaGrid'); if (!grid) return;
-        grid.innerHTML = uploads.length ? uploads.map(f => {
+
+        // Filter bar
+        const filterVal = document.getElementById('mediaFilter')?.value || 'all';
+        const filtered  = filterVal === 'global' ? uploads.filter(f => f.global)
+                        : filterVal === 'own'    ? uploads.filter(f => !f.global)
+                        : uploads;
+
+        // Update counts
+        const countEl = document.getElementById('mediaCount');
+        if (countEl) countEl.textContent = `${uploads.filter(f=>!f.global).length} eigene · ${uploads.filter(f=>f.global).length} global`;
+
+        grid.innerHTML = filtered.length ? filtered.map(f => {
             const isVid = /\.(mp4|webm|mov)$/i.test(f.filename);
-            return `<div class="media-card">
-                <div class="media-thumb">${isVid ? '<i class="fas fa-video media-icon"></i>' : `<img src="${f.url}" loading="lazy" onerror="this.style.display='none'">`}</div>
-                <div class="media-info"><div class="media-name" title="${f.filename}">${f.filename}</div><div class="media-size">${this.formatBytes(f.size)}</div></div>
+            return `<div class="media-card ${f.global?'media-card--global':''}">
+                <div class="media-thumb">${isVid ? '<i class="fas fa-video media-icon"></i>' : `<img src="${f.url}" loading="lazy" onerror="this.style.display='none'">`}
+                    ${f.global ? '<div class="media-global-badge">🌐 Global</div>' : ''}
+                </div>
+                <div class="media-info">
+                    <div class="media-name" title="${f.filename}">${f.filename}</div>
+                    <div class="media-size">${this.formatBytes(f.size)}</div>
+                </div>
                 <div style="padding:4px 8px 8px;display:flex;gap:4px">
                     <button class="btn btn-ghost btn-xs" onclick="navigator.clipboard.writeText('${f.url}');admin.showToast('Kopiert!','success')"><i class="fas fa-copy"></i></button>
-                    <button class="btn btn-danger btn-xs viewer-hidden" onclick="admin.deleteMedia('${f.filename}')"><i class="fas fa-trash"></i></button>
+                    ${!f.global ? `<button class="btn btn-danger btn-xs viewer-hidden" onclick="admin.deleteMedia('${f.filename}')"><i class="fas fa-trash"></i></button>` : ''}
                 </div>
             </div>`;
-        }).join('') : `<div class="empty-state" style="grid-column:1/-1"><i class="fas fa-photo-film"></i><p>Keine Medien vorhanden</p></div>`;
+        }).join('') : `<div class="empty-state" style="grid-column:1/-1"><i class="fas fa-photo-film"></i><p>Keine Medien</p></div>`;
     }
 
     async handleMediaUpload(e) {
